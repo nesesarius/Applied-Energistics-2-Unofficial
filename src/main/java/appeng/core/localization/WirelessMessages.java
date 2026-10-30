@@ -66,9 +66,14 @@ public enum WirelessMessages implements Localization {
 
     Super,
     SuperBound,
-    SuperBoundFailed,
+    SuperAnchorMoved,
+    SuperNoNetwork,
+    SuperHubActive,
+    SuperConnectorHubActive,
+    SuperConnectorActive,
+    SuperFreeAdded,
+    SuperFreeKnown,
     SuperClear,
-    SuperNetworkList,
     SuperNetwork,
     SuperNetworkListEmpty;
 

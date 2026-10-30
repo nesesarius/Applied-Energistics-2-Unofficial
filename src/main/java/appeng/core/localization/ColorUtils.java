@@ -122,9 +122,11 @@ public class ColorUtils {
         reshuffleStatusComplete             = color.rgb("reshuffleStatusComplete",              "0x0055FF"),
         reshuffleStatusFailed               = color.rgb("reshuffleStatusFailed",                "0xCC0000"),
         reshuffleStatusCancelled            = color.rgb("reshuffleStatusCancelled",             "0xFF6600"),
-        wirelessKitGood                     = color.rgb("wirelessKitGood",                      "0xBBFF51"),
-        wirelessKitNeutral                  = color.rgb("wirelessKitNeutral",                   "0xFAAE44"),
-        wirelessKitBad                      = color.rgb("wirelessKitBad",                       "0xFF003C"),
+        wirelessKitText                     = color.rgb("wirelessKitText",                      "0x404040"),
+        wirelessKitTextDim                  = color.rgb("wirelessKitTextDim",                   "0x6F6F6F"),
+        wirelessKitTextDisabled             = color.rgb("wirelessKitTextDisabled",              "0x9A9A9A"),
+        wirelessKitTextTarget               = color.rgb("wirelessKitTextTarget",                "0x1E7A3C"),
+        wirelessKitTextBad                  = color.rgb("wirelessKitTextBad",                   "0xC0262D"),
         contextMenuText                     = color.rgb("contextMenuText",                      "0x404040"),
         interfaceStuck                      = color.rgb("interfaceStuck",                       "0xff8080"),
         craftingTreeRequest                 = color.rgb("craftingTreeRequest",                  "0xAAAAAA"),
@@ -181,6 +183,16 @@ public class ColorUtils {
         networkVisualiserLinkDefault        = color.argb("networkVisualiserLinkDefault",        "0xff0000ff"),
         contextMenuBackground               = color.argb("contextMenuBackground",               "0xFFCDCDCD"),
         contextMenuBackgroundHover          = color.argb("contextMenuBackgroundHover",          "0xFFA0A0A0"),
-        contextMenuBorder                   = color.argb("contextMenuBorder",                   "0xFF404040");
+        contextMenuBorder                   = color.argb("contextMenuBorder",                   "0xFF404040"),
+        wirelessKitRowHeader                = color.argb("wirelessKitRowHeader",                "0x1A000000"),
+        wirelessKitRowSeparator             = color.argb("wirelessKitRowSeparator",             "0xFFA8A8A8"),
+        wirelessKitRowHover                 = color.argb("wirelessKitRowHover",                 "0x50FFFFFF"),
+        wirelessKitRowActive                = color.argb("wirelessKitRowActive",                "0x4045DA75"),
+        wirelessKitGuide                    = color.argb("wirelessKitGuide",                    "0xFF9A9A9A"),
+        wirelessKitMeterFrame               = color.argb("wirelessKitMeterFrame",               "0xFF373737"),
+        wirelessKitMeterBackground          = color.argb("wirelessKitMeterBackground",          "0xFFC6C6C6"),
+        wirelessKitMeterIdle                = color.argb("wirelessKitMeterIdle",                "0xFF7A7A7A"),
+        wirelessKitMeterBusy                = color.argb("wirelessKitMeterBusy",                "0xFFE8B020"),
+        wirelessKitMeterFull                = color.argb("wirelessKitMeterFull",                "0xFFE0203C");
     // spotless:on
 }

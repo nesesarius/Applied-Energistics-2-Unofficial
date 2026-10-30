@@ -11,4 +11,8 @@ public interface IHighlighter {
     void clear();
 
     long getExpireTime();
+
+    default boolean blinks() {
+        return true;
+    }
 }

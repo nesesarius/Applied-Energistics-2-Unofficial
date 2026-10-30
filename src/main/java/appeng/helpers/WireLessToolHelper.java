@@ -3,6 +3,7 @@ package appeng.helpers;
 import static appeng.items.tools.ToolWirelessKit.getConfigManager;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import javax.annotation.Nullable;
@@ -10,16 +11,18 @@ import javax.annotation.Nullable;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
-import net.minecraft.nbt.NBTTagList;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.ChatComponentTranslation;
+import net.minecraft.util.IChatComponent;
 import net.minecraft.world.World;
 import net.minecraftforge.common.util.ForgeDirection;
 
 import appeng.api.config.AdvancedWirelessToolMode;
 import appeng.api.config.Settings;
 import appeng.api.config.WirelessToolMode;
+import appeng.api.networking.IGrid;
 import appeng.api.networking.IGridHost;
+import appeng.api.networking.IGridNode;
 import appeng.api.networking.security.BaseActionSource;
 import appeng.api.networking.security.PlayerSource;
 import appeng.api.util.DimensionalCoord;
@@ -27,6 +30,7 @@ import appeng.api.util.IConfigManager;
 import appeng.core.localization.WirelessMessages;
 import appeng.server.ServerHelper;
 import appeng.tile.networking.TileWirelessBase;
+import appeng.tile.networking.TileWirelessConnector;
 import appeng.util.Platform;
 
 public class WireLessToolHelper {
@@ -49,9 +53,9 @@ public class WireLessToolHelper {
     public final static String NbtAdvanced2ndPoint = "2ndPoint";
 
     public final static String NbtSuper = "Super";
-    public final static String NbtSuperPins = "pins";
-    public final static String NbtSuperNames = "names";
     public final static String NbtSuperPos = "pos";
+    public final static String NbtSuperActive = "active";
+    public final static String NbtSuperFree = "free";
 
     public static void nextToolMode(EntityPlayer p, IConfigManager cm) {
         final WirelessToolMode newState = (WirelessToolMode) Platform.rotateEnum(
@@ -102,13 +106,93 @@ public class WireLessToolHelper {
             }
             case Super -> {
                 NBTTagCompound newTag = new NBTTagCompound();
-                newTag.setTag(NbtSuperPins, new NBTTagList());
-                newTag.setTag(NbtSuperNames, new NBTTagList());
                 newTag.setTag(NbtSuperPos, new NBTTagCompound());
                 tag.setTag(NbtSuper, newTag);
             }
         }
         if (p != null) p.addChatMessage(WirelessMessages.Cleared.toChat(mode.getLocal()));
+    }
+
+    public static NBTTagCompound getSuperTag(ItemStack tool) {
+        if (tool.getTagCompound() == null) newNBT(tool);
+        else if (!tool.getTagCompound().hasKey(NbtSuper)) clearNBT(tool, WirelessToolMode.Super, null);
+        return tool.getTagCompound().getCompoundTag(NbtSuper);
+    }
+
+    /**
+     * The network the kit remembers. Kits from before kept a list of them here; only its first entry counts now.
+     */
+    @Nullable
+    public static DimensionalCoord getSuperNetwork(NBTTagCompound superTag) {
+        final List<DimensionalCoord> anchors = DimensionalCoord.readAsListFromNBT(superTag.getCompoundTag(NbtSuperPos));
+        return anchors.isEmpty() ? null : anchors.get(0);
+    }
+
+    private static void setSuperNetwork(NBTTagCompound superTag, DimensionalCoord anchor) {
+        final NBTTagCompound tag = new NBTTagCompound();
+        DimensionalCoord.writeListToNBT(tag, Collections.singletonList(anchor));
+        superTag.setTag(NbtSuperPos, tag);
+    }
+
+    public static void forgetSuperNetwork(NBTTagCompound superTag) {
+        superTag.setTag(NbtSuperPos, new NBTTagCompound());
+    }
+
+    /**
+     * The device picked in the Super mode: any hub or connector. The GUI derives the bind target from it.
+     */
+    @Nullable
+    public static DimensionalCoord getSuperActive(NBTTagCompound superTag) {
+        return superTag.hasKey(NbtSuperActive) ? DimensionalCoord.readFromNBT(superTag.getCompoundTag(NbtSuperActive))
+                : null;
+    }
+
+    public static void setSuperActive(NBTTagCompound superTag, @Nullable DimensionalCoord active) {
+        if (active == null) {
+            superTag.removeTag(NbtSuperActive);
+            return;
+        }
+
+        final NBTTagCompound tag = new NBTTagCompound();
+        active.writeToNBT(tag);
+        superTag.setTag(NbtSuperActive, tag);
+    }
+
+    /**
+     * Free connectors kept by the kit itself: clicked in the world or unbound in the GUI, wherever their grid is.
+     */
+    public static List<DimensionalCoord> getSuperFree(NBTTagCompound superTag) {
+        return DimensionalCoord.readAsListFromNBT(superTag.getCompoundTag(NbtSuperFree));
+    }
+
+    public static void setSuperFree(NBTTagCompound superTag, List<DimensionalCoord> free) {
+        final NBTTagCompound tag = new NBTTagCompound();
+        DimensionalCoord.writeListToNBT(tag, free);
+        superTag.setTag(NbtSuperFree, tag);
+    }
+
+    /**
+     * @return false if the connector is already kept
+     */
+    public static boolean addSuperFree(NBTTagCompound superTag, DimensionalCoord connector) {
+        final List<DimensionalCoord> free = getSuperFree(superTag);
+        if (free.contains(connector)) return false;
+
+        free.add(connector);
+        setSuperFree(superTag, free);
+        return true;
+    }
+
+    @Nullable
+    public static IGrid getGrid(@Nullable TileEntity te) {
+        if (!(te instanceof IGridHost host)) return null;
+        final IGridNode node = host.getGridNode(ForgeDirection.UNKNOWN);
+        return node == null ? null : node.getGrid();
+    }
+
+    public static boolean isInGrid(@Nullable DimensionalCoord coord, IGrid grid, World w) {
+        return coord != null && coord.getDimension() == w.provider.dimensionId
+                && getGrid(w.getTileEntity(coord.x, coord.y, coord.z)) == grid;
     }
 
     @Nullable
@@ -566,25 +650,61 @@ public class WireLessToolHelper {
         }
     }
 
-    public static boolean bindSuper(TileEntity target, ItemStack tool, World w, EntityPlayer p) {
-        if (!tool.getTagCompound().hasKey(NbtSuper)) clearNBT(tool, WirelessToolMode.Super, null);
+    /**
+     * Super mode click on a block of an AE network: the kit remembers that network, only one, the next one replaces it.
+     * A hub or a linked connector also becomes the active device, so the GUI opens on it and binds go to the hub; a
+     * free connector is kept in the kit instead, to be bound later. Sneaking only skips the block's own GUI.
+     */
+    public static boolean useSuper(TileEntity target, ItemStack tool, World w, EntityPlayer p) {
+        final IGrid grid = getGrid(target);
+        if (grid == null) {
+            p.addChatMessage(WirelessMessages.SuperNoNetwork.toChat());
+            return false;
+        }
 
-        final NBTTagCompound tag = tool.getTagCompound().getCompoundTag(NbtSuper).getCompoundTag(NbtSuperPos);
-        final List<DimensionalCoord> locList = DimensionalCoord.readAsListFromNBT(tag);
-        for (DimensionalCoord dc : locList) {
-            TileEntity TempTe = w.getTileEntity(dc.x, dc.y, dc.z);
-            if (TempTe instanceof IGridHost tile && target instanceof IGridHost gh) {
-                if (gh.getGridNode(ForgeDirection.UNKNOWN).getGrid()
-                        == tile.getGridNode(ForgeDirection.UNKNOWN).getGrid()) {
-                    p.addChatMessage(WirelessMessages.SuperBoundFailed.toChat());
-                    return false;
-                }
+        final NBTTagCompound superTag = getSuperTag(tool);
+        final DimensionalCoord targetLoc = new DimensionalCoord(target);
+
+        if (target instanceof TileWirelessConnector connector && !connector.isLinked()) {
+            p.addChatMessage(
+                    (addSuperFree(superTag, targetLoc) ? WirelessMessages.SuperFreeAdded
+                            : WirelessMessages.SuperFreeKnown).toChat(targetLoc.getGuiTextShortNoDim()));
+            return true;
+        }
+
+        if (target instanceof TileWirelessBase device) {
+            // a device of the remembered network leaves the anchor where it is
+            if (!isInGrid(getSuperNetwork(superTag), grid, w)) rememberNetwork(superTag, targetLoc, grid, w, p);
+            // a linked connector itself becomes active: the GUI shows it right away and binds go to its hub
+            setSuperActive(superTag, targetLoc);
+            p.addChatMessage(activeMessage(device));
+        } else {
+            rememberNetwork(superTag, targetLoc, grid, w, p);
+        }
+        return true;
+    }
+
+    private static IChatComponent activeMessage(TileWirelessBase device) {
+        final String loc = device.getLocation().getGuiTextShortNoDim();
+        if (device.isHub()) return WirelessMessages.SuperHubActive.toChat(loc);
+
+        for (TileWirelessBase other : device.getConnectedTiles()) {
+            if (other.isHub()) {
+                return WirelessMessages.SuperConnectorHubActive.toChat(loc, other.getLocation().getGuiTextShortNoDim());
             }
         }
-        DimensionalCoord targetLoc = new DimensionalCoord(target);
-        p.addChatMessage(WirelessMessages.SuperBound.toChat(targetLoc.getGuiTextShortNoDim()));
-        locList.add(targetLoc);
-        DimensionalCoord.writeListToNBT(tag, locList);
-        return true;
+        return WirelessMessages.SuperConnectorActive.toChat(loc);
+    }
+
+    private static void rememberNetwork(NBTTagCompound superTag, DimensionalCoord anchor, IGrid grid, World w,
+            EntityPlayer p) {
+        // the same network only moves its anchor to the last clicked block
+        final boolean same = isInGrid(getSuperNetwork(superTag), grid, w);
+        setSuperNetwork(superTag, anchor);
+        p.addChatMessage(
+                (same ? WirelessMessages.SuperAnchorMoved : WirelessMessages.SuperBound)
+                        .toChat(anchor.getGuiTextShortNoDim()));
+
+        if (!isInGrid(getSuperActive(superTag), grid, w)) setSuperActive(superTag, null);
     }
 }

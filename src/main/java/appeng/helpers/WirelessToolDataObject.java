@@ -2,6 +2,7 @@ package appeng.helpers;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 import appeng.api.util.AEColor;
 import appeng.api.util.DimensionalCoord;
@@ -31,6 +32,34 @@ public class WirelessToolDataObject {
         this.channels = channels;
         this.isHub = isHub;
         this.slots = slots;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof WirelessToolDataObject other)) return false;
+        return this.isConnected == other.isConnected && this.channels == other.channels
+                && this.isHub == other.isHub
+                && this.slots == other.slots
+                && this.network.equals(other.network)
+                && this.customName.equals(other.customName)
+                && this.cord.equals(other.cord)
+                && this.targets.equals(other.targets)
+                && this.color == other.color;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(
+                this.network,
+                this.customName,
+                this.cord,
+                this.isConnected,
+                this.targets,
+                this.color,
+                this.channels,
+                this.isHub,
+                this.slots);
     }
 
     public void write(ByteBuf buf) {

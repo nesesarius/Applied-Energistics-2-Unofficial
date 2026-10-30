@@ -12,11 +12,10 @@ public class WirelessKitCommand {
     public enum WirelessKitCommands {
         BIND,
         UNBIND,
-        PIN,
         DELETE,
         RENAME_SINGLE,
-        RENAME_GROUP,
-        RECOLOR
+        RECOLOR,
+        SET_ACTIVE
     }
 
     public enum PinType {
@@ -71,6 +70,13 @@ public class WirelessKitCommand {
             return cmd;
         }
 
+        public static SubCommand single(DimensionalCoord coord) {
+            final SubCommand cmd = new SubCommand();
+            cmd.setGroupBy(PinType.SINGLE);
+            cmd.setCoord(coord);
+            return cmd;
+        }
+
         public void setCoord(DimensionalCoord coord) {
             this.coord = coord;
         }
@@ -100,7 +106,6 @@ public class WirelessKitCommand {
     public String name = "";
     public AEColor color = null;
     public DimensionalCoord networkPos = null;
-    public boolean pin = false;
     public SubCommand subCommand = null;
     public final ArrayList<SubCommand> toBindRow = new ArrayList<>();
     public final ArrayList<SubCommand> targetRow = new ArrayList<>();
@@ -123,8 +128,6 @@ public class WirelessKitCommand {
             this.networkPos.writeToPacket(buf);
         } else buf.writeBoolean(false);
 
-        buf.writeBoolean(this.pin);
-
         if (this.subCommand != null) {
             buf.writeBoolean(true);
             this.subCommand.write(buf);
@@ -143,12 +146,7 @@ public class WirelessKitCommand {
 
         if (buf.readBoolean()) command.setColor(AEColor.VALUES[buf.readInt()]);
         if (buf.readBoolean()) command.setNetworkPos(DimensionalCoord.readFromPacket(buf));
-        final boolean pin = buf.readBoolean();
-        if (buf.readBoolean()) {
-            final SubCommand subCommand = SubCommand.read(buf);
-            if (pin) command.setPinCommand(subCommand);
-            else command.setCommand(subCommand);
-        }
+        if (buf.readBoolean()) command.setCommand(SubCommand.read(buf));
 
         final int toBindRowSize = buf.readInt();
         for (int i = 0; i < toBindRowSize; i++) {
@@ -184,11 +182,6 @@ public class WirelessKitCommand {
     }
 
     public void setCommand(SubCommand SubCommand) {
-        this.subCommand = SubCommand;
-    }
-
-    public void setPinCommand(SubCommand SubCommand) {
-        this.pin = true;
         this.subCommand = SubCommand;
     }
 }

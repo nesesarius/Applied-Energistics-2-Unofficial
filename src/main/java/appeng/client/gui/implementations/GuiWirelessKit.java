@@ -1,1347 +1,988 @@
 package appeng.client.gui.implementations;
 
+import static appeng.client.gui.implementations.wirelesskit.WirelessKitTree.CHANNEL_CAPACITY;
+
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
-import java.util.Objects;
+import java.util.Set;
+import java.util.function.Consumer;
 
-import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
-import net.minecraft.client.gui.GuiButton;
+import net.minecraft.client.audio.PositionedSoundRecord;
 import net.minecraft.entity.player.InventoryPlayer;
-import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
-import net.minecraft.nbt.NBTTagList;
-import net.minecraftforge.common.MinecraftForge;
+import net.minecraft.util.ResourceLocation;
 
 import org.lwjgl.input.Keyboard;
-import org.lwjgl.input.Mouse;
 import org.lwjgl.opengl.GL11;
 
-import appeng.api.AEApi;
-import appeng.api.config.Settings;
-import appeng.api.config.WirelessToolGroupBy;
-import appeng.api.config.YesNo;
-import appeng.api.events.GuiScrollEvent;
 import appeng.api.util.AEColor;
 import appeng.api.util.DimensionalCoord;
-import appeng.api.util.IConfigManager;
-import appeng.api.util.IConfigurableObject;
 import appeng.api.util.NamedDimensionalCoord;
 import appeng.client.gui.AEBaseGui;
+import appeng.client.gui.implementations.wirelesskit.WirelessKitIcon;
+import appeng.client.gui.implementations.wirelesskit.WirelessKitRow;
+import appeng.client.gui.implementations.wirelesskit.WirelessKitRow.Button;
+import appeng.client.gui.implementations.wirelesskit.WirelessKitRow.Look;
+import appeng.client.gui.implementations.wirelesskit.WirelessKitRow.Style;
+import appeng.client.gui.implementations.wirelesskit.WirelessKitRow.Toggle;
+import appeng.client.gui.implementations.wirelesskit.WirelessKitRowBuilder;
+import appeng.client.gui.implementations.wirelesskit.WirelessKitTree;
+import appeng.client.gui.implementations.wirelesskit.WirelessKitViewState;
 import appeng.client.gui.widgets.GuiAeButton;
-import appeng.client.gui.widgets.GuiCheckBox;
-import appeng.client.gui.widgets.GuiColorButton;
-import appeng.client.gui.widgets.GuiImgButton;
 import appeng.client.gui.widgets.GuiScrollbar;
 import appeng.client.gui.widgets.MEGuiTextField;
 import appeng.client.render.highlighter.BlockPosHighlighter;
+import appeng.client.render.highlighter.WirelessKitHighlighter;
 import appeng.container.implementations.ContainerWirelessKit;
+import appeng.core.AELog;
 import appeng.core.localization.ButtonToolTips;
 import appeng.core.localization.ColorUtils;
 import appeng.core.localization.GuiText;
 import appeng.core.localization.PlayerMessages;
 import appeng.core.sync.network.NetworkHandler;
-import appeng.core.sync.packets.PacketConfigButton;
 import appeng.core.sync.packets.PacketWirelessToolCommand;
-import appeng.helpers.WireLessToolHelper;
 import appeng.helpers.WirelessKitCommand;
-import appeng.helpers.WirelessKitCommand.PinType;
 import appeng.helpers.WirelessKitCommand.SubCommand;
 import appeng.helpers.WirelessKitCommand.WirelessKitCommands;
 import appeng.helpers.WirelessToolDataObject;
 import appeng.items.contents.WirelessKitObject;
-import appeng.util.IConfigManagerHost;
 
-public class GuiWirelessKit extends AEBaseGui implements IConfigManagerHost {
+/**
+ * Super mode of the Wireless Kit: one scrolling list with the networks as trees and the free connectors at the bottom.
+ * Every action is a single command; the list only changes when the server answers with fresh data.
+ */
+public class GuiWirelessKit extends AEBaseGui implements WirelessKitRowBuilder.Actions {
 
-    private final int TOP_OFFSET = 22;
-    private final int SCROLLBAR_HEIGHT = 229;
+    private static final ResourceLocation TEXTURE = new ResourceLocation(
+            "appliedenergistics2",
+            "textures/guis/wirelesskit.png");
 
-    private GuiImgButton sortBy;
-    private GuiImgButton hideBoundedButton;
-    private GuiAeButton bind;
-    private GuiAeButton unbind;
-    private final GuiColorButton[] colorButtons = new GuiColorButton[17];
-    private GuiCheckBox madChameleonButton;
+    // layout, relative to the GUI corner
+    private static final int WIDTH = 288;
+    private static final int LIST_X = 8;
+    private static final int LIST_Y = 20;
+    private static final int LIST_W = 256;
+    private static final int BOTTOM = 8;
+    private static final int MIN_ROWS = 4;
+    private static final int SCREEN_MARGIN = 8;
+    private static final int SCROLL_X = 270;
+    private static final int HEADER_Y = 5;
+    private static final int HEADER_TITLE_Y = 7;
+    private static final int SIZE_X = 271;
+    private static final int SEARCH_X = 130;
+    private static final int SEARCH_Y = 4;
+    private static final int SEARCH_W = 136;
+    private static final int SEARCH_H = 12;
+    private static final int RENAME_MAX_LENGTH = 64;
 
-    private final MEGuiTextField[] nameField = new MEGuiTextField[30];
+    // layout of a row
+    private static final int ROW_H = 24;
+    private static final int INDENT = 12;
+    private static final int ICON_X = 11;
+    private static final int ITEM_Y = 4;
+    private static final int ITEM_SIZE = 16;
+    private static final int TOGGLE_Y = 7;
+    private static final int TEXT_X = 30;
+    private static final int TITLE_Y = 3;
+    private static final int SUBTITLE_Y = 14;
+    private static final int UPPER_Y = 1;
+    private static final int LOWER_Y = 12;
+    private static final int BUTTON = 11;
+    private static final int TEXT_BUTTON_MAX = 110;
+    /** Widgets on the right of a row end here. */
+    private static final int ROW_RIGHT = LIST_X + LIST_W - 2;
+    /** One pixel per channel. */
+    private static final int METER_W = CHANNEL_CAPACITY;
+    private static final int METER_Y = 4;
+    private static final int METER_H = 7;
 
-    private final GuiCheckBox[] pinButtons = new GuiCheckBox[10];
+    // colour palette: 16 colours, fluix and Mad Chameleon
+    private static final int PALETTE_CELL = 12;
+    private static final int PALETTE_SWATCH = 10;
+    private static final int PALETTE_PAD = 2;
+    private static final int PALETTE_COLUMNS = 6;
+    private static final int PALETTE_CELLS = AEColor.VALUES.length + 1;
+    private static final int PALETTE_W = PALETTE_COLUMNS * PALETTE_CELL + 2 * PALETTE_PAD;
+    private static final int PALETTE_H = (PALETTE_CELLS + PALETTE_COLUMNS - 1) / PALETTE_COLUMNS * PALETTE_CELL
+            + 2 * PALETTE_PAD;
 
-    private final GuiCheckBox[] includeConnectorsButtons = new GuiCheckBox[30];
-    private final GuiCheckBox[] includeHubsButtons = new GuiCheckBox[30];
-    private final GuiCheckBox[] deleteButtons = new GuiCheckBox[30];
+    private static final long CONFIRM_MS = 3000;
+    private static final int WHITE = 0xFFFFFF;
 
-    private final IConfigManager configSrc;
-    private WirelessToolGroupBy mode;
-    private YesNo hideBounded;
+    // texture atlas, see WirelessKitIcon for the glyphs
+    private static final int PANEL_PATCH = 24;
+    private static final int LIGHT_INSET_U = 24;
+    private static final int DARK_INSET_U = 27;
+    private static final int INSET_PATCH = 3;
+    private static final int FRAME_V = 24;
+    private static final int FRAME_NORMAL = 0;
+    private static final int FRAME_HOVER = 1;
+    private static final int FRAME_DISABLED = 2;
+    private static final int FRAME_DANGER = 3;
+    /** Unchecked, checked, then the same two hovered. */
+    private static final int CHECKBOX_V = 36;
+    private static final int CHECKBOX = 9;
 
-    private final GuiScrollbar unselectedColumnScroll;
-    private final GuiScrollbar toBindColumnScroll;
-    private final GuiScrollbar targetColumnScroll;
+    private final WirelessKitViewState state = WirelessKitViewState.INSTANCE;
+    private final GuiScrollbar scrollbar = new GuiScrollbar();
+    private final MEGuiTextField search;
+    private final MEGuiTextField renameField = new MEGuiTextField(0, 12) {
 
-    private final ArrayList<ItemStack> icons;
+        // the field scrolls its text by its own width to keep the cursor in view: the width has to be in place first
+        @Override
+        public void setText(String text, boolean ignoreTrigger) {
+            this.setDimensionsAndColor();
+            super.setText(text, ignoreTrigger);
+        }
+    };
+    /** Draws every text button of the list, vanilla style. */
+    private final GuiAeButton textButton = new GuiAeButton(0, 0, 0, 0, BUTTON, "", null);
 
-    private final ArrayList<BaseUnit> unselected = new ArrayList<>();
-    private final ArrayList<BaseUnit> toBind = new ArrayList<>();
-    private final ArrayList<BaseUnit> target = new ArrayList<>();
+    /** Null until the first data packet arrives. */
+    @Nullable
+    private WirelessKitTree tree;
+    private List<WirelessKitRow> rows = Collections.emptyList();
+    private boolean rowsDirty = true;
+    private int visibleRows = MIN_ROWS;
 
-    private BaseUnit toRemoveFromUnselected;
-    private BaseUnit toAddToUnselected;
+    /** Device row to scroll into view: a new active device. */
+    @Nullable
+    private DimensionalCoord reveal;
+    @Nullable
+    private DimensionalCoord armedHub;
+    private long armedUntil;
 
-    private BaseUnit toRemoveFromToBind;
-    private BaseUnit toAddToBind;
+    @Nullable
+    private WirelessKitRow renaming;
+    private String renameInitial = "";
+    @Nullable
+    private Consumer<String> renameSubmit;
 
-    private BaseUnit toRemoveFromTarget;
-    private BaseUnit toAddTarget;
-
-    private NBTTagCompound nData;
-    private ArrayList<WirelessToolDataObject> wData;
+    @Nullable
+    private WirelessKitRow paletteRow;
 
     public GuiWirelessKit(final InventoryPlayer inventoryPlayer, final WirelessKitObject te) {
-        this(inventoryPlayer, te, new ContainerWirelessKit(inventoryPlayer, te));
-    }
+        super(new ContainerWirelessKit(inventoryPlayer, te));
+        this.xSize = WIDTH;
+        this.setScrollBar(this.scrollbar);
 
-    public GuiWirelessKit(final InventoryPlayer inventoryPlayer, final WirelessKitObject te,
-            final ContainerWirelessKit c) {
-        super(c);
-        this.configSrc = ((IConfigurableObject) this.inventorySlots).getConfigManager();
-        ((ContainerWirelessKit) this.inventorySlots).setGui(this);
-        this.mode = (WirelessToolGroupBy) this.configSrc.getSetting(Settings.WIRELESS_TOOL_GROUP_BY);
-        this.hideBounded = (YesNo) this.configSrc.getSetting(Settings.WIRELESS_TOOL_HIDE_BOUNDED);
-        this.xSize = 256;
-        this.ySize = 256;
-        this.unselectedColumnScroll = new GuiScrollbar();
-        this.toBindColumnScroll = new GuiScrollbar();
-        this.targetColumnScroll = new GuiScrollbar();
-        this.icons = setIcons();
+        this.search = new MEGuiTextField(SEARCH_W, SEARCH_H) {
 
-        for (int i = 0; i < 30; i++) {
-            this.nameField[i] = new MEGuiTextField(94, 12, GuiText.GuiWirelessKitNameFieldDesc.getLocal()) {
-
-                @Override
-                public void mouseClicked(int xPos, int yPos, int button) {
-                    xPos = (xPos - guiLeft) * 2;
-                    yPos = (yPos - guiTop) * 2;
-
-                    super.mouseClicked(xPos, yPos, button);
-                }
-
-            };
-
-            if (i >= 20) {
-                this.nameField[i].x = 177 * 2 + 26;
-                this.nameField[i].y = ((i - 20) * 23 + TOP_OFFSET) * 2;
-            } else if (i >= 10) {
-                this.nameField[i].x = 100 * 2 + 26;
-                this.nameField[i].y = ((i - 10) * 23 + TOP_OFFSET) * 2;
-            } else {
-                this.nameField[i].x = 5 * 2 + 26;
-                this.nameField[i].y = (i * 23 + TOP_OFFSET) * 2;
+            @Override
+            public void onTextChange(final String oldText) {
+                GuiWirelessKit.this.state.search = this.getText();
+                GuiWirelessKit.this.scrollbar.setCurrentScroll(0);
+                GuiWirelessKit.this.rowsDirty = true;
             }
-        }
+        };
+        this.search.x = SEARCH_X;
+        this.search.y = SEARCH_Y;
+        this.search.setText(this.state.search, true);
+        this.renameField.setMaxStringLength(RENAME_MAX_LENGTH);
     }
 
     @Override
     public void initGui() {
+        final int fitting = (this.height - 2 * SCREEN_MARGIN - LIST_Y - BOTTOM - 2) / ROW_H;
+        this.visibleRows = Math.max(MIN_ROWS, Math.min(this.state.size.rows, fitting));
+        this.ySize = LIST_Y + this.visibleRows * ROW_H + 1 + BOTTOM;
         super.initGui();
-        setScrollBar();
-        addButtons();
+
+        this.scrollbar.setLeft(SCROLL_X).setTop(LIST_Y).setHeight(this.visibleRows * ROW_H);
+        this.updateScrollRange();
+        this.cancelRename();
+        this.paletteRow = null;
     }
 
-    private ArrayList<ItemStack> setIcons() {
-        ArrayList<ItemStack> list = new ArrayList<>();
+    /**
+     * The server sends the list on open, after every command and whenever it changes while the GUI is open.
+     */
+    public void setData(final NBTTagCompound nbt, final List<WirelessToolDataObject> devices) {
+        final WirelessToolDataObject previousActive = this.tree == null ? null : this.tree.getActive();
+        final WirelessToolDataObject previousTarget = this.tree == null ? null : this.tree.getBindTarget();
+        this.tree = WirelessKitTree.build(nbt, devices, this.mc.theWorld.provider.dimensionId);
 
-        for (int i = 0; i < 16; i++) {
-            final ItemStack is = AEApi.instance().definitions().blocks().wirelessConnector().maybeStack(1).orNull();
-            is.setItemDamage(i + 1);
-            list.add(is);
-        }
-        final ItemStack iss = AEApi.instance().definitions().blocks().wirelessConnector().maybeStack(1).orNull();
-        list.add(iss);
+        final Set<DimensionalCoord> free = new HashSet<>();
+        this.tree.getFree().forEach(c -> free.add(c.cord));
+        this.state.retainChecked(free);
 
-        for (int i = 0; i < 16; i++) {
-            final ItemStack is = AEApi.instance().definitions().blocks().wirelessHub().maybeStack(1).orNull();
-            is.setItemDamage(i + 1);
-            list.add(is);
-        }
-        final ItemStack is = AEApi.instance().definitions().blocks().wirelessHub().maybeStack(1).orNull();
-        list.add(is);
-        return list;
-    }
+        final WirelessToolDataObject active = this.tree.getActive();
+        if (active != null && (previousActive == null || !previousActive.cord.equals(active.cord))) {
+            // the hub that was open as the target stays open
+            if (previousTarget != null && previousTarget.isHub) this.state.keepHubExpanded(previousTarget.cord);
 
-    private void setScrollBar() {
-        this.unselectedColumnScroll.setTop(TOP_OFFSET).setLeft(67).setHeight(SCROLLBAR_HEIGHT);
-        this.toBindColumnScroll.setTop(TOP_OFFSET).setLeft(162).setHeight(SCROLLBAR_HEIGHT);
-        this.targetColumnScroll.setTop(TOP_OFFSET).setLeft(239).setHeight(SCROLLBAR_HEIGHT);
-
-        this.unselectedColumnScroll.setRange(0, this.unselected.size() - 10, 1);
-        this.toBindColumnScroll.setRange(0, this.toBind.size() - 10, 1);
-        this.targetColumnScroll.setRange(0, this.target.size() - 10, 1);
-    }
-
-    protected void addButtons() {
-        for (int i = 0; i < 8; i++) {
-            this.colorButtons[i] = new GuiColorButton(
-                    0,
-                    this.guiLeft + 81,
-                    this.guiTop + TOP_OFFSET + 8 + (9 * i),
-                    8,
-                    8,
-                    AEColor.VALUES[i],
-                    AEColor.VALUES[i].toString());
-            this.buttonList.add(this.colorButtons[i]);
+            // the new target opens up together with its network
+            final WirelessToolDataObject target = this.tree.getBindTarget();
+            if (target != null) this.state.resetExpansion(target.network, target.cord);
+            this.reveal = active.cord;
         }
 
-        for (int i = 8; i < 16; i++) {
-            this.colorButtons[i] = new GuiColorButton(
-                    0,
-                    this.guiLeft + 90,
-                    this.guiTop + TOP_OFFSET + 8 + (9 * (i - 8)),
-                    8,
-                    8,
-                    AEColor.VALUES[i],
-                    AEColor.VALUES[i].toString());
-            this.buttonList.add(this.colorButtons[i]);
-        }
-
-        this.colorButtons[16] = new GuiColorButton(
-                0,
-                this.guiLeft + 81,
-                this.guiTop + TOP_OFFSET - 1,
-                8,
-                8,
-                AEColor.VALUES[16],
-                AEColor.VALUES[16].toString());
-
-        this.buttonList.add(this.colorButtons[16]);
-
-        this.madChameleonButton = new GuiCheckBox(
-                0.5D,
-                this.guiLeft + 90,
-                this.guiTop + TOP_OFFSET - 1,
-                16 * 6 + 13,
-                16 * 6 + 13,
-                ButtonToolTips.WirelessKitMadChameleonRecolorName.getLocal(),
-                ButtonToolTips.WirelessKitMadChameleonRecolorDesc.getLocal());
-        this.buttonList.add(this.madChameleonButton);
-
-        for (int i = 0; i < 10; i++) {
-            this.pinButtons[i] = new GuiCheckBox(
-                    0.25D,
-                    this.guiLeft + 232,
-                    this.guiTop + (i * 23) + TOP_OFFSET + 6,
-                    16 * 7 + 13,
-                    16 * 6 + 14,
-                    ButtonToolTips.WirelessKitPinButtonName.getLocal(),
-                    ButtonToolTips.WirelessKitPinButtonDesc.getLocal());
-            this.pinButtons[i].visible = false;
-            this.buttonList.add(this.pinButtons[i]);
-        }
-
-        for (int i = 0; i < 30; i++) {
-            int x;
-            int y;
-            if (i >= 20) {
-                x = this.guiLeft + 232;
-                y = this.guiTop + ((i - 20) * 23) + TOP_OFFSET + 17;
-            } else if (i >= 10) {
-                x = this.guiLeft + 155;
-                y = this.guiTop + ((i - 10) * 23) + TOP_OFFSET + 17;
-            } else {
-                x = this.guiLeft + 60;
-                y = this.guiTop + (i * 23) + TOP_OFFSET + 17;
-            }
-
-            this.includeConnectorsButtons[i] = new GuiCheckBox(
-                    0.25D,
-                    x - 5,
-                    y,
-                    ButtonToolTips.WirelessKitIncludeConnectorsName.getLocal(),
-                    ButtonToolTips.WirelessKitIncludeConnectorsDesc.getLocal());
-            this.includeHubsButtons[i] = new GuiCheckBox(
-                    0.25D,
-                    x,
-                    y,
-                    ButtonToolTips.WirelessKitIncludeHubsName.getLocal(),
-                    ButtonToolTips.WirelessKitIncludeHubsDesc.getLocal());
-            this.deleteButtons[i] = new GuiCheckBox(
-                    0.25D,
-                    x - 55,
-                    y - 17,
-                    ButtonToolTips.WirelessKitDeleteName.getLocal(),
-                    ButtonToolTips.WirelessKitDeleteDesc.getLocal());
-            this.includeConnectorsButtons[i].visible = false;
-            this.includeHubsButtons[i].visible = false;
-            this.deleteButtons[i].visible = false;
-            this.buttonList.add(this.includeHubsButtons[i]);
-            this.buttonList.add(this.includeConnectorsButtons[i]);
-            this.buttonList.add(this.deleteButtons[i]);
-        }
-
-        this.bind = new GuiAeButton(
-                0,
-                this.guiLeft + 131,
-                this.guiTop + 4,
-                44,
-                16,
-                ButtonToolTips.WirelessKitBindName.getLocal(),
-                ButtonToolTips.WirelessKitBindDesc.getLocal());
-
-        this.unbind = new GuiAeButton(
-                0,
-                this.guiLeft + 81,
-                this.guiTop + 4,
-                44,
-                16,
-                ButtonToolTips.WirelessKitUnbindName.getLocal(),
-                ButtonToolTips.WirelessKitUnbindDesc.getLocal());
-
-        this.sortBy = new GuiImgButton(
-                this.guiLeft + 4,
-                this.guiTop + 4,
-                Settings.WIRELESS_TOOL_GROUP_BY,
-                WirelessToolGroupBy.Single);
-
-        this.hideBoundedButton = new GuiImgButton(
-                this.guiLeft + 24,
-                this.guiTop + 4,
-                Settings.WIRELESS_TOOL_HIDE_BOUNDED,
-                YesNo.NO);
-
-        this.buttonList.add(this.bind);
-        this.buttonList.add(this.unbind);
-        this.buttonList.add(this.sortBy);
-        this.buttonList.add(this.hideBoundedButton);
+        WirelessKitHighlighter.setLinks(
+                active == null ? null : active.cord,
+                active == null ? Collections.emptyList() : active.targets);
+        this.rowsDirty = true;
     }
 
     @Override
-    protected void keyTyped(char typedChar, int keyCode) {
-        for (BaseUnit bs : unselected) {
-            if (bs.keyTyped(typedChar, keyCode)) return;
-        }
-
-        for (BaseUnit bs : toBind) {
-            if (bs.keyTyped(typedChar, keyCode)) return;
-        }
-
-        for (BaseUnit bs : target) {
-            if (bs.keyTyped(typedChar, keyCode)) return;
-        }
-
-        super.keyTyped(typedChar, keyCode);
+    public void onGuiClosed() {
+        super.onGuiClosed();
+        WirelessKitHighlighter.setHovered(Collections.emptyList());
     }
 
-    @Override
-    protected void actionPerformed(final GuiButton btn) {
-        super.actionPerformed(btn);
+    // ---- rows
 
-        if (btn == this.sortBy) {
-            final boolean backwards = Mouse.isButtonDown(1);
-            NetworkHandler.instance.sendToServer(new PacketConfigButton(this.sortBy.getSetting(), backwards));
-        } else if (btn == this.hideBoundedButton) {
-            final boolean backwards = Mouse.isButtonDown(1);
-            NetworkHandler.instance
-                    .sendToServer(new PacketConfigButton(this.hideBoundedButton.getSetting(), backwards));
-        } else if (btn == this.madChameleonButton) {
-            reColorCommand(null);
-        } else if (btn == this.bind) {
-            sendCommand(WirelessKitCommands.BIND, null);
-        } else if (btn == this.unbind) {
-            sendCommand(WirelessKitCommands.UNBIND, null);
+    private void rebuildRows() {
+        if (this.tree == null) return;
+
+        this.rows = new WirelessKitRowBuilder(this.tree, this.state, this).build();
+        this.rowsDirty = false;
+        this.updateScrollRange();
+
+        // popups follow their row through a rebuild
+        if (this.renaming != null) {
+            this.renaming = this.findRow(this.renaming);
+            if (this.renaming == null) this.cancelRename();
         }
+        if (this.paletteRow != null) this.paletteRow = this.findRow(this.paletteRow);
 
-        for (GuiColorButton colorButton : colorButtons) {
-            if (btn == colorButton) {
-                reColorCommand(colorButton.getColor());
-            }
+        if (this.reveal != null) {
+            final int index = this.indexOfDevice(this.reveal);
+            final int scroll = this.scrollbar.getCurrentScroll();
+            // keep the parent row in sight when scrolling up
+            if (index >= 0 && index < scroll) this.scrollbar.setCurrentScroll(index - 1);
+            else if (index >= scroll + this.visibleRows) this.scrollbar.setCurrentScroll(index - this.visibleRows + 1);
+            this.reveal = null;
         }
     }
 
+    private int indexOfDevice(final DimensionalCoord device) {
+        for (int i = 0; i < this.rows.size(); i++) {
+            final WirelessKitRow row = this.rows.get(i);
+            if (row.style == Style.DEVICE && device.equals(row.key)) return i;
+        }
+        return -1;
+    }
+
+    @Nullable
+    private WirelessKitRow findRow(final WirelessKitRow old) {
+        for (WirelessKitRow row : this.rows) {
+            if (row.isSameRow(old)) return row;
+        }
+        return null;
+    }
+
+    private void updateScrollRange() {
+        this.scrollbar.setRange(0, Math.max(0, this.rows.size() - this.visibleRows), 1);
+    }
+
+    /** Index on screen, or -1 when the row is scrolled away. */
+    private int screenIndex(final WirelessKitRow row) {
+        final int index = this.rows.indexOf(row) - this.scrollbar.getCurrentScroll();
+        return index >= 0 && index < this.visibleRows ? index : -1;
+    }
+
+    private static int rowY(final int screenIndex) {
+        return LIST_Y + screenIndex * ROW_H;
+    }
+
+    private static int rowX(final WirelessKitRow row) {
+        return LIST_X + row.depth * INDENT;
+    }
+
+    // ---- drawing
+
     @Override
-    protected void mouseClicked(final int xCoord, final int yCoord, final int btn) {
-        if (this.unselectedColumnScroll != null) {
-            this.unselectedColumnScroll.click(this, xCoord - this.guiLeft, yCoord - this.guiTop);
-        }
-
-        if (this.toBindColumnScroll != null) {
-            this.toBindColumnScroll.click(this, xCoord - this.guiLeft, yCoord - this.guiTop);
-        }
-
-        if (this.targetColumnScroll != null) {
-            this.targetColumnScroll.click(this, xCoord - this.guiLeft, yCoord - this.guiTop);
-        }
-
-        for (BaseUnit bs : unselected) {
-            bs.mouseClicked(xCoord, yCoord, btn);
-        }
-
-        for (BaseUnit bs : toBind) {
-            bs.mouseClicked(xCoord, yCoord, btn);
-        }
-
-        for (BaseUnit bs : target) {
-            bs.mouseClicked(xCoord, yCoord, btn);
-        }
-
-        super.mouseClicked(xCoord, yCoord, btn);
+    public void drawBG(final int offsetX, final int offsetY, final int mouseX, final int mouseY) {
+        final int listH = this.visibleRows * ROW_H;
+        this.bindTexture(TEXTURE);
+        this.drawTextured9PatchRect(offsetX, offsetY, this.xSize, this.ySize, 0, 0, PANEL_PATCH, PANEL_PATCH);
+        this.drawInset(offsetX + LIST_X - 1, offsetY + LIST_Y - 1, LIST_W + 2, listH + 2, LIGHT_INSET_U);
+        this.drawInset(offsetX + SCROLL_X - 1, offsetY + LIST_Y - 1, 14, listH + 2, DARK_INSET_U);
+        this.drawInset(offsetX + SEARCH_X - 1, offsetY + SEARCH_Y - 1, SEARCH_W + 2, SEARCH_H + 2, DARK_INSET_U);
     }
 
     @Override
-    protected void mouseClickMove(final int x, final int y, final int c, final long d) {
-        if (this.unselectedColumnScroll != null) {
-            this.unselectedColumnScroll.clickMove(y - this.guiTop);
-        }
-
-        if (this.toBindColumnScroll != null) {
-            this.toBindColumnScroll.clickMove(y - this.guiTop);
-        }
-
-        if (this.targetColumnScroll != null) {
-            this.targetColumnScroll.clickMove(y - this.guiTop);
-        }
-
-        super.mouseClickMove(x, y, c, d);
-
-    }
-
-    @Override
-    public void handleMouseInput() {
-        super.handleMouseInput();
-
-        int wheel = Mouse.getEventDWheel();
-        if (wheel == 0) {
-            return;
-        }
-
-        final int x = Mouse.getEventX() * this.width / this.mc.displayWidth;
-        final int y = this.height - Mouse.getEventY() * this.height / this.mc.displayHeight - 1;
-
-        if (MinecraftForge.EVENT_BUS.post(new GuiScrollEvent(this, x, y, wheel))) {
-            return;
-        }
-
-        if (!this.mouseWheelEvent(x, y, wheel)) {
-            if (this.unselectedColumnScroll != null
-                    && (x > guiLeft + 3 && x < guiLeft + 79 && y > guiTop + TOP_OFFSET)) {
-                final GuiScrollbar scrollBar = this.unselectedColumnScroll;
-                if (x > this.guiLeft && y - this.guiTop > scrollBar.getTop()
-                        && x <= this.guiLeft + this.xSize
-                        && y - this.guiTop <= scrollBar.getTop() + scrollBar.getHeight()) {
-                    this.unselectedColumnScroll.wheel(wheel);
-                }
-            }
-            if (this.toBindColumnScroll != null && (x > guiLeft + 98 && x < guiLeft + 174 && y > guiTop + TOP_OFFSET)) {
-                final GuiScrollbar scrollBar = this.toBindColumnScroll;
-                if (x > this.guiLeft && y - this.guiTop > scrollBar.getTop()
-                        && x <= this.guiLeft + this.xSize
-                        && y - this.guiTop <= scrollBar.getTop() + scrollBar.getHeight()) {
-                    this.toBindColumnScroll.wheel(wheel);
-                }
-            }
-            if (this.targetColumnScroll != null
-                    && (x > guiLeft + 175 && x < guiLeft + 251 && y > guiTop + TOP_OFFSET)) {
-                final GuiScrollbar scrollBar = this.targetColumnScroll;
-                if (x > this.guiLeft && y - this.guiTop > scrollBar.getTop()
-                        && x <= this.guiLeft + this.xSize
-                        && y - this.guiTop <= scrollBar.getTop() + scrollBar.getHeight()) {
-                    this.targetColumnScroll.wheel(wheel);
-                }
-            }
+    public void updateScreen() {
+        super.updateScreen();
+        if (this.armedHub != null && System.currentTimeMillis() > this.armedUntil) {
+            this.armedHub = null;
+            this.rowsDirty = true;
         }
     }
 
     @Override
     public void drawFG(final int offsetX, final int offsetY, final int mouseX, final int mouseY) {
+        if (this.rowsDirty) this.rebuildRows();
 
-        this.unselectedColumnScroll.draw(this);
-        this.toBindColumnScroll.draw(this);
-        this.targetColumnScroll.draw(this);
+        final int mx = mouseX - this.guiLeft;
+        final int my = mouseY - this.guiTop;
+        final boolean popup = this.paletteRow != null;
 
-        reset();
-        drawUnselected(mouseX, mouseY);
-        drawToBind(mouseX, mouseY);
-        drawTarget(mouseX, mouseY);
-    }
+        this.fontRendererObj.drawString(
+                GuiText.WirelessKitTitle.getLocal(),
+                LIST_X,
+                HEADER_TITLE_Y,
+                ColorUtils.wirelessKitText.getColor());
+        this.search.drawTextBox();
+        this.drawIconButton(
+                SIZE_X,
+                HEADER_Y,
+                this.state.size.icon,
+                Look.NORMAL,
+                true,
+                !popup && isInside(mx, my, SIZE_X, HEADER_Y, BUTTON, BUTTON));
 
-    private void reset() {
-        for (int i = 0; i < 30; i++) {
-            this.includeConnectorsButtons[i].visible = false;
-            this.includeHubsButtons[i].visible = false;
-            this.deleteButtons[i].visible = false;
-            if (i < 10) this.pinButtons[i].visible = false;
-        }
-
-        for (BaseUnit bu : this.unselected) {
-            bu.isVisible = false;
-        }
-
-        for (BaseUnit bu : this.toBind) {
-            bu.isVisible = false;
-        }
-
-        for (BaseUnit bu : this.target) {
-            bu.isVisible = false;
-        }
-    }
-
-    private void drawUnselected(final int mouseX, final int mouseY) {
-        final int viewStart = this.unselectedColumnScroll.getCurrentScroll();
-        final int viewEnd = viewStart + 10;
-
-        int y = 0;
-
-        for (int z = viewStart; z < Math.min(viewEnd, unselected.size()); z++) {
-            unselected.get(z).setXY(5, y, 0);
-            unselected.get(z).draw(mouseX, mouseY);
-
-            y++;
-        }
-
-        if (toRemoveFromUnselected != null) {
-            unselected.remove(toRemoveFromUnselected);
-            toRemoveFromUnselected = null;
-            setScrollBar();
-        }
-
-        if (toAddToUnselected != null) {
-            unselected.add(toAddToUnselected);
-            toAddToUnselected = null;
-            setScrollBar();
-        }
-    }
-
-    private void drawToBind(final int mouseX, final int mouseY) {
-        final int viewStart = this.toBindColumnScroll.getCurrentScroll();
-        final int viewEnd = viewStart + 10;
-
-        int y = 0;
-
-        for (int z = viewStart; z < Math.min(viewEnd, toBind.size()); z++) {
-            toBind.get(z).setXY(100, y, 1);
-            toBind.get(z).draw(mouseX, mouseY);
-
-            y++;
-        }
-
-        if (toRemoveFromToBind != null) {
-            toBind.remove(toRemoveFromToBind);
-            toRemoveFromToBind = null;
-            setScrollBar();
-        }
-
-        if (toAddToBind != null) {
-            toBind.add(toAddToBind);
-            toAddToBind = null;
-            setScrollBar();
-        }
-    }
-
-    private void drawTarget(final int mouseX, final int mouseY) {
-        final int viewStart = this.targetColumnScroll.getCurrentScroll();
-        final int viewEnd = viewStart + 10;
-
-        int y = 0;
-
-        for (int z = viewStart; z < Math.min(viewEnd, target.size()); z++) {
-            target.get(z).setXY(177, y, 2);
-            target.get(z).draw(mouseX, mouseY);
-
-            y++;
-        }
-
-        if (toRemoveFromTarget != null) {
-            target.remove(toRemoveFromTarget);
-            toRemoveFromTarget = null;
-            setScrollBar();
-        }
-
-        if (toAddTarget != null) {
-            target.add(toAddTarget);
-            toAddTarget = null;
-            setScrollBar();
-        }
-    }
-
-    private class singleUnit extends BaseUnit {
-
-        singleUnit(WirelessToolDataObject data, String customNetworkName, String customColorName) {
-            super(data, customNetworkName, customColorName);
-        }
-
-        @Override
-        public void draw(final int mouseX, final int mouseY) {
-            final int posY = yo * offY + TOP_OFFSET;
-            final int descPosX = xo * 3 + 46;
-
-            GL11.glPushMatrix();
-            GL11.glScaled(0.7666, 0.7666, 0.7666);
-            drawItem(
-                    (int) Math.round(xo / 0.7666) + 1,
-                    yo * (int) Math.round(offY / 0.7666) + TOP_OFFSET + 9,
-                    icons.get(data.isHub ? data.color.ordinal() + 17 : data.color.ordinal()));
-            GL11.glPopMatrix();
-
-            drawTextBox(mouseX, mouseY);
-
-            drawNetworkName(descPosX, posY);
-
-            GL11.glPushMatrix();
-            GL11.glScaled(0.333, 0.333, 0.333);
-
-            fontRendererObj.drawString(
-                    GuiText.GuiWirelessKitColor.getLocal(this.customColorName),
-                    descPosX,
-                    posY * 3 + 28,
-                    ColorUtils.guiTextColorGray.getColor());
-            fontRendererObj.drawString(
-                    GuiText.GuiWirelessKitSelfPos.getLocal(data.cord.getGuiTextShort()),
-                    descPosX,
-                    posY * 3 + 38,
-                    ColorUtils.guiTextColorGray.getColor());
-            if (data.isConnected) fontRendererObj.drawString(
-                    GuiText.GuiWirelessKitTargetPos.getLocal(data.targets.get(0).getGuiTextShort()),
-                    descPosX,
-                    posY * 3 + 48,
-                    ColorUtils.guiTextColorGray.getColor());
-            GL11.glPopMatrix();
-
-            int indicatorColor = ColorUtils.wirelessKitGood.getColor();
-            final int usedSlots;
-            final int totalSlots;
-            if (data.isHub) {
-                usedSlots = 32 - data.slots;
-                totalSlots = 32;
-                if (data.slots == 0) {
-                    indicatorColor = ColorUtils.wirelessKitBad.getColor();
-                } else if (data.slots < 32) {
-                    indicatorColor = ColorUtils.wirelessKitNeutral.getColor();
-                }
-            } else {
-                usedSlots = 1 - data.slots;
-                totalSlots = 1;
-                if (data.slots == 0) {
-                    indicatorColor = ColorUtils.wirelessKitBad.getColor();
-                }
+        WirelessKitRow hovered = null;
+        int hoveredY = 0;
+        final int scroll = this.scrollbar.getCurrentScroll();
+        for (int i = 0; i < this.visibleRows && scroll + i < this.rows.size(); i++) {
+            final WirelessKitRow row = this.rows.get(scroll + i);
+            final int y = rowY(i);
+            final boolean over = !popup && isInside(mx, my, LIST_X, y, LIST_W, ROW_H);
+            if (over) {
+                hovered = row;
+                hoveredY = y;
             }
-            String str = usedSlots + "/" + totalSlots + " | " + data.channels;
-            drawSlotsIndicator(str, posY, indicatorColor, mouseX, mouseY, usedSlots, totalSlots, data.channels);
-            super.draw(mouseX, mouseY);
+            this.drawRow(row, y, i, over, mx, my);
         }
 
-        @Override
-        protected void renameCommand() {
-            sendCommand(WirelessKitCommands.RENAME_SINGLE, this);
+        this.drawRenameBar();
+        this.drawPalette(mx, my);
+        this.drawTooltips(hovered, hoveredY, mx, my);
+
+        WirelessKitHighlighter.setHovered(hovered == null ? Collections.emptyList() : hovered.devices);
+    }
+
+    private void drawRow(final WirelessKitRow row, final int y, final int screenIndex, final boolean hovered,
+            final int mx, final int my) {
+        if (row.style == Style.HEADER) {
+            drawRect(LIST_X, y, LIST_X + LIST_W, y + ROW_H, ColorUtils.wirelessKitRowHeader.getColor());
+            if (screenIndex > 0) {
+                drawRect(LIST_X, y, LIST_X + LIST_W, y + 1, ColorUtils.wirelessKitRowSeparator.getColor());
+            }
+        }
+        if (row.active) drawRect(LIST_X, y, LIST_X + LIST_W, y + ROW_H, ColorUtils.wirelessKitRowActive.getColor());
+        if (hovered && row.style != Style.NOTE) {
+            drawRect(LIST_X, y, LIST_X + LIST_W, y + ROW_H, ColorUtils.wirelessKitRowHover.getColor());
+        }
+
+        if (row.style == Style.NOTE) {
+            final String text = this.fit(row.title, LIST_W - 8);
+            this.fontRendererObj.drawString(
+                    text,
+                    LIST_X + (LIST_W - this.fontRendererObj.getStringWidth(text)) / 2,
+                    y + 8,
+                    row.titleColor);
+            return;
+        }
+
+        final List<Placed> widgets = this.layout(row, y);
+        int upperEnd = ROW_RIGHT;
+        int lowerEnd = upperEnd;
+        for (Placed p : widgets) {
+            if (p.y == y + UPPER_Y) upperEnd = Math.min(upperEnd, p.x);
+            else lowerEnd = Math.min(lowerEnd, p.x);
+        }
+        if (row.meter >= 0) {
+            upperEnd -= this.meterWidth();
+            this.drawMeter(row.meter, upperEnd, y);
+        }
+
+        final int x = rowX(row);
+        this.drawGuides(row, y);
+        if (row.toggle != Toggle.NONE) {
+            this.drawGlyph(
+                    x + 1,
+                    y + TOGGLE_Y,
+                    row.toggle == Toggle.EXPANDED ? WirelessKitIcon.EXPANDED : WirelessKitIcon.COLLAPSED,
+                    ColorUtils.wirelessKitText.getColor());
+        } else if (row.checked != null) {
+            final boolean over = isInside(mx, my, x, y, ICON_X, ROW_H);
+            final int u = (row.checked ? CHECKBOX : 0) + (over ? 2 * CHECKBOX : 0);
+            this.drawSprite(x + 1, y + TOGGLE_Y, u, CHECKBOX_V, CHECKBOX, CHECKBOX, WHITE);
+        }
+        if (row.icon != null) this.drawItem(x + ICON_X, y + ITEM_Y, row.icon);
+
+        final int textX = x + TEXT_X;
+        this.fontRendererObj.drawString(this.fit(row.title, upperEnd - 4 - textX), textX, y + TITLE_Y, row.titleColor);
+
+        final String subtitle = this.fit(row.subtitle, lowerEnd - 4 - textX);
+        this.fontRendererObj.drawString(subtitle, textX, y + SUBTITLE_Y, row.subtitleColor);
+        if (row.badge != null) {
+            final int badgeX = textX + this.fontRendererObj.getStringWidth(subtitle) + (subtitle.isEmpty() ? 0 : 4);
+            this.fontRendererObj.drawString(
+                    this.fit(row.badge, lowerEnd - 4 - badgeX),
+                    badgeX,
+                    y + SUBTITLE_Y,
+                    ColorUtils.wirelessKitTextTarget.getColor());
+        }
+
+        for (Placed p : widgets) this.drawWidget(p, mx, my);
+    }
+
+    /**
+     * Tree lines: the branch to this row, the lines of ancestors that go on below it, and a stub down to its children.
+     */
+    private void drawGuides(final WirelessKitRow row, final int y) {
+        final int color = ColorUtils.wirelessKitGuide.getColor();
+        final int mid = y + ROW_H / 2;
+
+        if (row.depth > 0) {
+            for (int d = 1; d < row.depth; d++) {
+                if (row.hasOpenGuide(d)) drawRect(guideX(d), y, guideX(d) + 1, y + ROW_H, color);
+            }
+            final int x = guideX(row.depth);
+            drawRect(x, y, x + 1, row.isLastChild() ? mid + 1 : y + ROW_H, color);
+            final boolean hasControl = row.toggle != Toggle.NONE || row.checked != null;
+            drawRect(x + 1, mid, rowX(row) + (hasControl ? 1 : ICON_X - 1), mid + 1, color);
+        }
+
+        if (row.isParent()) {
+            final int x = guideX(row.depth + 1);
+            drawRect(x, y + TOGGLE_Y + WirelessKitIcon.SIZE, x + 1, y + ROW_H, color);
         }
     }
 
-    private class GroupUnit extends BaseUnit {
-
-        private final ArrayList<WirelessToolDataObject> wsList = new ArrayList<>();
-        private final ArrayList<NamedDimensionalCoord> cordList = new ArrayList<>();
-        private boolean includeHubs;
-        private boolean includeConnectors;
-        private int channels;
-        private int slots;
-        private int usedSlots;
-
-        GroupUnit(WirelessToolDataObject data, String customNetworkName) {
-            this(data, customNetworkName, false, true, true, false);
-        }
-
-        GroupUnit(WirelessToolDataObject data, String customNetworkName, boolean byColor, String customColorName) {
-            this(data, customNetworkName, customColorName, byColor, true, true, false);
-        }
-
-        GroupUnit(WirelessToolDataObject data, String customNetworkName, boolean byColor, String customColorName,
-                boolean includeConnectors, boolean includeHubs, boolean isPinned) {
-            this(data, customNetworkName, customColorName, byColor, includeConnectors, includeHubs, isPinned);
-        }
-
-        GroupUnit(WirelessToolDataObject data, String customNetworkName, boolean byColor, boolean includeConnectors,
-                boolean includeHubs, boolean isPinned) {
-            this(data, customNetworkName, "", byColor, includeConnectors, includeHubs, isPinned);
-        }
-
-        GroupUnit(WirelessToolDataObject data, String customNetworkName, String customColorName, boolean byColor,
-                boolean includeConnectors, boolean includeHubs, boolean isPinned) {
-            super(data, customNetworkName, customColorName);
-            this.byColor = byColor;
-            this.wsList.add(data);
-            this.includeHubs = includeHubs;
-            this.includeConnectors = includeConnectors;
-            this.isPinned = isPinned;
-
-            if (includeConnectors && !data.isHub) {
-                this.cordList.add(new NamedDimensionalCoord(data.cord, data.customName));
-                this.channels = data.channels;
-                this.slots = 1;
-                this.usedSlots = 1 - data.slots;
-            }
-
-            if (includeHubs && data.isHub) {
-                this.cordList.add(new NamedDimensionalCoord(data.cord, data.customName));
-                this.channels = data.channels;
-                this.slots = 32;
-                this.usedSlots = 32 - data.slots;
-            }
-        }
-
-        public void addToGroup(WirelessToolDataObject data) {
-            this.wsList.add(data);
-
-            if (includeConnectors && !data.isHub) {
-                this.cordList.add(new NamedDimensionalCoord(data.cord, data.customName));
-                this.channels += data.channels;
-                this.slots += 1;
-                this.usedSlots += 1 - data.slots;
-            }
-
-            if (includeHubs && data.isHub) {
-                this.cordList.add(new NamedDimensionalCoord(data.cord, data.customName));
-                this.channels += data.channels;
-                this.slots += 32;
-                this.usedSlots += 32 - data.slots;
-            }
-        }
-
-        private void reCalc() {
-            this.cordList.clear();
-            this.channels = 0;
-            this.slots = 0;
-            this.usedSlots = 0;
-
-            for (WirelessToolDataObject s : wsList) {
-                if (includeConnectors && !s.isHub) {
-                    this.cordList.add(new NamedDimensionalCoord(s.cord, s.customName));
-                    this.channels += s.channels;
-                    this.slots += 1;
-                    this.usedSlots += 1 - s.slots;
-                }
-
-                if (includeHubs && s.isHub) {
-                    this.cordList.add(new NamedDimensionalCoord(s.cord, s.customName));
-                    this.channels += s.channels;
-                    this.slots += 32;
-                    this.usedSlots += 32 - s.slots;
-                }
-            }
-        }
-
-        @Override
-        protected String getTitleName() {
-            if (this.byColor) return this.customColorName;
-            return this.customNetworkName;
-        }
-
-        @Override
-        protected void handleButtons() {
-            if (totalPos > 19) {
-                pinButtons[yo].visible = true;
-                pinButtons[yo].setState(this.isPinned);
-            }
-            if (!byColor) {
-                deleteButtons[totalPos].visible = true;
-            }
-            includeConnectorsButtons[totalPos].visible = true;
-            includeConnectorsButtons[totalPos].setState(this.includeConnectors);
-            includeHubsButtons[totalPos].visible = true;
-            includeHubsButtons[totalPos].setState(this.includeHubs);
-        }
-
-        @Override
-        protected void renameCommand() {
-            sendCommand(WirelessKitCommands.RENAME_GROUP, this);
-        }
-
-        @Override
-        public void draw(final int mouseX, final int mouseY) {
-            final int offY = 23;
-            final int posY = yo * offY + TOP_OFFSET;
-            final int descPosX = xo * 3 + 46;
-            final int scaleCorrectionX = (int) Math.round(xo / 0.45);
-            final int scaleCorrectionY = (int) Math.round(posY / 0.45);
-
-            GL11.glPushMatrix();
-            GL11.glScaled(0.45, 0.45, 0.45);
-            if (byColor) {
-                if (includeHubs) {
-                    drawItem(scaleCorrectionX + 7, scaleCorrectionY + 2, icons.get(data.color.ordinal() + 17));
-                } else {
-                    drawItem(scaleCorrectionX + 7, scaleCorrectionY + 2, icons.get(data.color.ordinal()));
-                }
-                if (includeConnectors) {
-                    drawItem(scaleCorrectionX, scaleCorrectionY + 14, icons.get(data.color.ordinal()));
-                    drawItem(scaleCorrectionX + 14, scaleCorrectionY + 14, icons.get(data.color.ordinal()));
-                } else {
-                    drawItem(scaleCorrectionX, scaleCorrectionY + 14, icons.get(data.color.ordinal() + 17));
-                    drawItem(scaleCorrectionX + 14, scaleCorrectionY + 14, icons.get(data.color.ordinal() + 17));
-                }
-            } else {
-                if (includeHubs) {
-                    drawItem(scaleCorrectionX + 7, scaleCorrectionY + 2, icons.get(17));
-                } else {
-                    drawItem(scaleCorrectionX + 7, scaleCorrectionY + 2, icons.get(0));
-                }
-                if (includeConnectors) {
-                    drawItem(scaleCorrectionX, scaleCorrectionY + 14, icons.get(1));
-                    drawItem(scaleCorrectionX + 14, scaleCorrectionY + 14, icons.get(2));
-                } else {
-                    drawItem(scaleCorrectionX, scaleCorrectionY + 14, icons.get(1 + 17));
-                    drawItem(scaleCorrectionX + 14, scaleCorrectionY + 14, icons.get(2 + 17));
-                }
-            }
-
-            GL11.glPopMatrix();
-
-            drawTextBox(mouseX, mouseY);
-
-            drawNetworkName(descPosX, posY);
-
-            GL11.glPushMatrix();
-            GL11.glScaled(0.333, 0.333, 0.333);
-            if (byColor) {
-                fontRendererObj.drawString(
-                        GuiText.GuiWirelessKitColor.getLocal(this.customColorName),
-                        descPosX,
-                        posY * 3 + 28,
-                        ColorUtils.guiTextColorGray.getColor());
-            }
-            fontRendererObj.drawString(
-                    GuiText.GuiWirelessKitChannelsUsage.getLocal(channels),
-                    descPosX,
-                    posY * 3 + 38,
-                    ColorUtils.guiTextColorGray.getColor());
-            GL11.glPopMatrix();
-
-            int indicatorColor = ColorUtils.wirelessKitGood.getColor();
-            String str = usedSlots + "/" + slots;
-
-            if (usedSlots > 0) {
-                if (slots == usedSlots) {
-                    indicatorColor = ColorUtils.wirelessKitBad.getColor();
-                } else {
-                    indicatorColor = ColorUtils.wirelessKitNeutral.getColor();
-                }
-            }
-
-            drawSlotsIndicator(str, posY, indicatorColor, mouseX, mouseY, this.usedSlots, this.slots, this.channels);
-
-            super.draw(mouseX, mouseY);
-        }
-
-        @Override
-        public void mouseClicked(int xPos, int yPos, int button) {
-            if (this.isMouseIn(xPos, yPos)) {
-                if (Keyboard.isKeyDown(Keyboard.KEY_LSHIFT)) {
-                    final String prefix = this.byColor
-                            ? PlayerMessages.WirelessHighlighterColorPrefix
-                                    .getLocal(this.customColorName, this.customNetworkName)
-                            : PlayerMessages.WirelessHighlighterNetworkPrefix.getLocal(this.customNetworkName);
-
-                    final Map<NamedDimensionalCoord, String[]> messages = new HashMap<>();
-                    this.cordList.forEach(c -> messages.put(c, this.getHighlightKeys()));
-                    BlockPosHighlighter.highlightNamedBlocks(mc.thePlayer, messages, prefix);
-                    GuiWirelessKit.this.closeGui();
-                } else {
-                    if (includeConnectorsButtons[totalPos].mousePressed(null, xPos, yPos)) {
-                        this.includeConnectors ^= true;
-                        if (!this.includeConnectors && !this.includeHubs) {
-                            this.includeHubs = true;
-                        }
-                        reCalc();
-                        if (isPinned) {
-                            sendCommand(WirelessKitCommands.PIN, this);
-                        }
-                    } else if (includeHubsButtons[totalPos].mousePressed(null, xPos, yPos)) {
-                        this.includeHubs ^= true;
-                        if (!this.includeConnectors && !this.includeHubs) {
-                            this.includeConnectors = true;
-                        }
-                        reCalc();
-                        if (isPinned) {
-                            sendCommand(WirelessKitCommands.PIN, this);
-                        }
-                    } else if (deleteButtons[totalPos].mousePressed(null, xPos, yPos)) {
-                        sendCommand(WirelessKitCommands.DELETE, this);
-                    } else super.mouseClicked(xPos, yPos, button);
-                }
-            }
-        }
+    private static int guideX(final int depth) {
+        return LIST_X + (depth - 1) * INDENT + 5;
     }
 
-    private class BaseUnit {
-
-        protected final int w = 60;
-        protected final int h = 22;
-        protected final int offY = h + 1;
-        protected int x = 0;
-        protected int y = 0;
-        protected int xo = 0;
-        protected int yo = 0;
-        protected int totalPos = 0;
-        protected final WirelessToolDataObject data;
-        protected boolean inToBind = false;
-        protected boolean inTarget = false;
-        protected boolean isPinned = false;
-        protected String customNetworkName;
-        protected String customColorName;
-        protected boolean isVisible = false;
-        protected boolean byColor = false;
-
-        BaseUnit(WirelessToolDataObject data, String customNetworkName, String customColorName) {
-            this.data = data;
-            this.customNetworkName = !Objects.equals(customNetworkName, "") ? customNetworkName
-                    : data.cord.getGuiTextShort();
-            this.customColorName = !Objects.equals(customColorName, "") ? customColorName : data.color.toString();
-        }
-
-        public void setXY(int x, int y, int column) {
-            this.x = guiLeft + x;
-            this.y = guiTop + (y * (h + 1)) + TOP_OFFSET;
-            this.xo = x;
-            this.yo = y;
-            this.totalPos = y + column * 10;
-            this.isVisible = true;
-        }
-
-        protected String getTitleName() {
-            return this.data.customName;
-        }
-
-        protected void handleButtons() {
-            if (totalPos > 19 && data.isHub) {
-                pinButtons[yo].visible = true;
-                pinButtons[yo].setState(this.isPinned);
-            }
-        }
-
-        public void draw(final int mouseX, final int mouseY) {
-            handleButtons();
-        }
-
-        public void drawTextBox(final int mouseX, final int mouseY) {
-            final int localMouseX = mouseX - guiLeft;
-            final int localMouseY = mouseY - guiTop;
-
-            GL11.glPushMatrix();
-            GL11.glScaled(0.5, 0.5, 0.5);
-            nameField[totalPos].drawTextBox();
-            if (nameField[totalPos].isVisible() && nameField[totalPos].isMouseIn(localMouseX * 2, localMouseY * 2)) {
-                drawTooltip(localMouseX + 11, Math.max(localMouseY, 15) + 4, nameField[totalPos].getMessage());
-            }
-
-            if (!nameField[totalPos].isFocused()) nameField[totalPos].setText(this.getTitleName());
-
-            GL11.glPopMatrix();
-        }
-
-        public void drawNetworkName(int descPosX, int posY) {
-            GL11.glPushMatrix();
-            GL11.glScaled(0.333, 0.333, 0.333);
-            fontRendererObj.drawString(
-                    GuiText.GuiWirelessKitNetwork.getLocal(this.customNetworkName),
-                    descPosX,
-                    posY * 3 + 18,
-                    ColorUtils.guiTextColorGray.getColor());
-            GL11.glPopMatrix();
-        }
-
-        public void drawSlotsIndicator(String str, int posY, int indicatorColor, int mouseX, int mouseY, int usedSlots,
-                int totalSlots, int channels) {
-            drawRect(xo, posY + 15, xo + 14, posY + 20, indicatorColor - 16777216);
-            GL11.glPushMatrix();
-            GL11.glScaled(0.25, 0.25, 0.25);
-            fontRendererObj.drawString(
-                    str,
-                    (xo + 7) * 4 - (fontRendererObj.getStringWidth(str) / 2),
-                    posY * 4 + 66,
-                    ColorUtils.guiTextColorGray.getColor());
-            GL11.glPopMatrix();
-
-            final int localMouseX = mouseX - guiLeft;
-            final int localMouseY = mouseY - guiTop;
-            if (xo <= localMouseX && localMouseX < nameField[totalPos].x / 2
-                    && posY <= localMouseY
-                    && localMouseY < posY + h) {
-                drawTooltip(
-                        localMouseX + 11,
-                        Math.max(localMouseY, 15) + 4,
-                        new String[] { GuiText.GuiWirelessKitUsageTooltip.getLocal(),
-                                GuiText.GuiWirelessKitUsedSlots.getLocal(usedSlots, totalSlots),
-                                GuiText.GuiWirelessKitChannels.getLocal(channels) });
-            }
-        }
-
-        protected void renameCommand() {}
-
-        public boolean keyTyped(char typedChar, int keyCode) {
-            if (!isVisible) return false;
-            boolean isFocused = nameField[totalPos].isFocused();
-            if (nameField[totalPos].textboxKeyTyped(typedChar, keyCode)) {
-                return true;
-            } else if (isFocused && (keyCode == Keyboard.KEY_RETURN || keyCode == Keyboard.KEY_NUMPADENTER)) {
-                this.renameCommand();
-                return true;
-            }
-            return false;
-        }
-
-        protected String[] getHighlightKeys() {
-            return new String[] { PlayerMessages.WirelessHighlighted.getUnlocalized(),
-                    PlayerMessages.WirelessInOtherDim.getUnlocalized() };
-        }
-
-        public void mouseClicked(final int xPos, final int yPos, final int button) {
-            if (this.isMouseIn(xPos, yPos)) {
-                if (Keyboard.isKeyDown(Keyboard.KEY_LSHIFT)) {
-                    final Map<NamedDimensionalCoord, String[]> messages = new HashMap<>();
-                    messages.put(
-                            new NamedDimensionalCoord(this.data.cord, this.data.customName),
-                            this.getHighlightKeys());
-                    if (!this.data.targets.isEmpty()) messages.put(
-                            new NamedDimensionalCoord(this.data.targets.get(0), this.data.customName),
-                            this.getHighlightKeys());
-                    BlockPosHighlighter.highlightNamedBlocks(
-                            mc.thePlayer,
-                            messages,
-                            PlayerMessages.WirelessHighlighterPrefix.getLocal());
-                    GuiWirelessKit.this.closeGui();
-                    return;
-                }
-
-                nameField[totalPos].mouseClicked(xPos, yPos, button);
-                if (nameField[totalPos].isMouseIn((xPos - guiLeft) * 2, (yPos - guiTop) * 2)) {
-                    // no
-                } else if (pinButtons[yo].mousePressed(null, xPos, yPos)) {
-                    isPinned ^= true;
-                    sendCommand(WirelessKitCommands.PIN, this);
-                } else if (isPinned) {
-                    // no
-                } else if (this.inToBind) {
-                    toRemoveFromToBind = this;
-                    this.inToBind = false;
-                    if (button == 0) {
-                        toAddToUnselected = this;
-                    } else if (button == 1) {
-                        toAddTarget = this;
-                        this.inTarget = true;
-                    }
-                } else if (this.inTarget) {
-                    toRemoveFromTarget = this;
-                    this.inTarget = false;
-                    if (button == 0) {
-                        toAddToBind = this;
-                        this.inToBind = true;
-                    } else if (button == 1) {
-                        toAddToUnselected = this;
-                    }
-                } else {
-                    if (button == 0) {
-                        toRemoveFromUnselected = this;
-                        toAddToBind = this;
-                        this.inToBind = true;
-                    } else if (button == 1) {
-                        toRemoveFromUnselected = this;
-                        toAddTarget = this;
-                        this.inTarget = true;
-                    }
-                }
-            } else nameField[totalPos].mouseClicked(xPos, yPos, button);
-        }
-
-        public boolean isMouseIn(final int xCoord, final int yCoord) {
-            if (!isVisible) return false;
-            final boolean withinXRange = this.x <= xCoord && xCoord < this.x + this.w;
-            final boolean withinYRange = this.y <= yCoord && yCoord < this.y + this.h;
-
-            return withinXRange && withinYRange;
-        }
+    private int meterWidth() {
+        return METER_W + 6 + this.fontRendererObj.getStringWidth(CHANNEL_CAPACITY + "/" + CHANNEL_CAPACITY);
     }
 
-    @Override
-    public void drawBG(int offsetX, int offsetY, int mouseX, int mouseY) {
-        this.bindTexture("guis/wirelesskit.png");
-        this.drawTexturedModalRect(offsetX, offsetY, 0, 0, this.xSize, this.ySize);
+    /**
+     * Channels of a hub: grey while there is room, yellow from 24, red when all 32 are taken.
+     */
+    private void drawMeter(final int used, final int x, final int y) {
+        final int fill;
+        if (used >= CHANNEL_CAPACITY) fill = ColorUtils.wirelessKitMeterFull.getColor();
+        else if (used >= CHANNEL_CAPACITY * 3 / 4) fill = ColorUtils.wirelessKitMeterBusy.getColor();
+        else fill = ColorUtils.wirelessKitMeterIdle.getColor();
+
+        final int top = y + METER_Y;
+        final int bottom = top + METER_H;
+        drawRect(x, top, x + METER_W + 2, bottom, ColorUtils.wirelessKitMeterFrame.getColor());
+        drawRect(x + 1, top + 1, x + 1 + METER_W, bottom - 1, ColorUtils.wirelessKitMeterBackground.getColor());
+        drawRect(
+                x + 1,
+                top + 1,
+                x + 1 + Math.min(used, CHANNEL_CAPACITY) * METER_W / CHANNEL_CAPACITY,
+                bottom - 1,
+                fill);
+
+        this.fontRendererObj.drawString(
+                used + "/" + CHANNEL_CAPACITY,
+                x + METER_W + 5,
+                y + TITLE_Y,
+                used >= CHANNEL_CAPACITY ? ColorUtils.wirelessKitTextBad.getColor()
+                        : ColorUtils.wirelessKitText.getColor());
     }
 
-    @Override
-    public void updateSetting(final IConfigManager manager, final Enum settingName, final Enum newValue) {
-        if (this.sortBy != null) {
-            this.sortBy.set(this.configSrc.getSetting(Settings.WIRELESS_TOOL_GROUP_BY));
-            this.mode = (WirelessToolGroupBy) this.configSrc.getSetting(Settings.WIRELESS_TOOL_GROUP_BY);
-            this.hideBoundedButton.set(this.configSrc.getSetting(Settings.WIRELESS_TOOL_HIDE_BOUNDED));
-            this.hideBounded = (YesNo) this.configSrc.getSetting(Settings.WIRELESS_TOOL_HIDE_BOUNDED);
-        }
-        this.setData(null, null);
-    }
+    private void drawWidget(final Placed p, final int mx, final int my) {
+        final Button button = p.button;
+        final boolean hovered = this.paletteRow == null && p.contains(mx, my);
 
-    private void reColorCommand(AEColor color) {
-        final WirelessKitCommand command = new WirelessKitCommand(WirelessKitCommands.RECOLOR);
-        this.toBind.forEach(bu -> command.addToBind(this.getSubCommand(bu)));
-        command.setColor(color);
-        try {
-            NetworkHandler.instance.sendToServer(new PacketWirelessToolCommand(command));
-        } catch (IOException ignored) {}
-    }
-
-    private void sendCommand(WirelessKitCommands commandType, BaseUnit bu) {
-        final WirelessKitCommand command = new WirelessKitCommand(commandType);
-
-        switch (commandType) {
-            case RENAME_SINGLE, RENAME_GROUP -> {
-                command.setName(this.nameField[bu.totalPos].getText());
-                command.setCommand(this.getSubCommand(bu));
-            }
-            case PIN -> command.setPinCommand(getSubCommand(bu));
-            case DELETE -> command.setNetworkPos(bu.data.network);
-            case BIND -> {
-                this.toBind.forEach(butb -> command.addToBind(getSubCommand(butb)));
-                this.target.forEach(but -> command.addTarget(getSubCommand(but)));
-            }
-            case UNBIND -> this.toBind.forEach(butb -> command.addToBind(getSubCommand(butb)));
-            default -> {}
-        }
-        try {
-            NetworkHandler.instance.sendToServer(new PacketWirelessToolCommand(command));
-        } catch (IOException ignored) {}
-    }
-
-    @Nonnull
-    private SubCommand getSubCommand(BaseUnit butb) {
-        final SubCommand subCommand = new SubCommand();
-        if (butb instanceof GroupUnit gu) {
-            subCommand.setNetworkPos(gu.data.network);
-            if (gu.includeConnectors) subCommand.includeConnectors();
-            if (gu.includeHubs) subCommand.includeHubs();
-            if (gu.byColor) {
-                subCommand.setGroupBy(PinType.COLOR);
-            } else {
-                subCommand.setGroupBy(PinType.NETWORK);
-            }
-
-            subCommand.setColor(gu.data.color);
+        if (button.label != null) {
+            this.textButton.xPosition = p.x;
+            this.textButton.yPosition = p.y;
+            this.textButton.width = p.w;
+            this.textButton.height = p.h;
+            this.textButton.enabled = button.enabled;
+            this.textButton.displayString = this.fit(button.label, p.w - 6);
+            GL11.glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
+            // no hover glow under the palette
+            this.textButton.drawButton(this.mc, this.paletteRow == null ? mx : -1, my);
+        } else if (button.action == null) {
+            this.drawGlyph(p.x + 1, p.y + 1, button.icon, ColorUtils.wirelessKitText.getColor());
         } else {
-            subCommand.setGroupBy(PinType.SINGLE);
-            subCommand.setCoord(butb.data.cord);
-        }
-        return subCommand;
-    }
-
-    private static class SavedName {
-
-        final DimensionalCoord network;
-        final String name;
-        final AEColor color;
-        final boolean byColor;
-        final String colorName;
-
-        SavedName(DimensionalCoord network, String name, AEColor color, boolean byColor, String colorName) {
-            this.network = network;
-            this.name = name;
-            this.color = color;
-            this.byColor = byColor;
-            this.colorName = colorName;
-        }
-    }
-
-    private static class SavedPin {
-
-        final DimensionalCoord network;
-        final AEColor color;
-        final PinType type;
-        final DimensionalCoord coord;
-        final boolean includeConnectors;
-        final boolean includeHubs;
-
-        SavedPin(DimensionalCoord network, AEColor color, PinType type, DimensionalCoord coord,
-                boolean includeConnectors, boolean includeHubs) {
-            this.network = network;
-            this.color = color;
-            this.type = type;
-            this.coord = coord;
-            this.includeConnectors = includeConnectors;
-            this.includeHubs = includeHubs;
-        }
-    }
-
-    private GroupUnit getNetworkUnitFormResolver(ArrayList<GroupUnit> list, DimensionalCoord network, AEColor color,
-            boolean isPin) {
-        for (GroupUnit gu : list) {
-            if (gu.data.network.equals(network) && gu.isPinned == isPin) {
-                if (color == null) {
-                    return gu;
-                } else {
-                    if (gu.byColor && gu.data.color == color) {
-                        return gu;
-                    }
-                }
+            this.drawIconButton(p.x, p.y, button.icon, button.look, button.enabled, hovered);
+            if (button.swatch != null) {
+                drawRect(p.x + 2, p.y + 2, p.x + BUTTON - 2, p.y + BUTTON - 2, 0xFF000000 | button.swatch);
             }
         }
-        return null;
     }
 
-    public void setData(final NBTTagCompound nData, final ArrayList<WirelessToolDataObject> wData) {
-        if (nData != null && wData != null) {
-            this.nData = nData;
-            this.wData = wData;
+    private void drawIconButton(final int x, final int y, @Nullable final WirelessKitIcon icon, final Look look,
+            final boolean enabled, final boolean hovered) {
+        final int frame;
+        final int glyph;
+        if (!enabled) {
+            frame = FRAME_DISABLED;
+            glyph = ColorUtils.wirelessKitTextDisabled.getColor();
+        } else if (look == Look.DANGER) {
+            frame = FRAME_DANGER;
+            glyph = WHITE;
+        } else {
+            frame = hovered ? FRAME_HOVER : FRAME_NORMAL;
+            glyph = ColorUtils.wirelessKitText.getColor();
         }
 
-        if (this.nData == null || this.wData == null) return;
+        this.drawSprite(x, y, frame * BUTTON, FRAME_V, BUTTON, BUTTON, WHITE);
+        if (icon != null) this.drawGlyph(x + 1, y + 1, icon, glyph);
+    }
 
-        this.unselected.clear();
-        this.toBind.clear();
-        this.target.clear();
+    private void drawGlyph(final int x, final int y, final WirelessKitIcon icon, final int rgb) {
+        this.drawSprite(
+                x,
+                y,
+                icon.u(),
+                icon.v(),
+                WirelessKitIcon.SIZE,
+                WirelessKitIcon.SIZE,
+                icon.isTinted() ? rgb : WHITE);
+    }
 
-        ArrayList<GroupUnit> networkGroupResolver = new ArrayList<>();
+    /**
+     * Draws a piece of the atlas tinted with the colour. Text and plain rectangles leave their colour behind, so it is
+     * always set first.
+     */
+    private void drawSprite(final int x, final int y, final int u, final int v, final int w, final int h,
+            final int rgb) {
+        this.bindTexture(TEXTURE);
+        GL11.glEnable(GL11.GL_BLEND);
+        GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
+        GL11.glColor4f((rgb >> 16 & 0xFF) / 255f, (rgb >> 8 & 0xFF) / 255f, (rgb & 0xFF) / 255f, 1.0F);
+        this.drawTexturedModalRect(x, y, u, v, w, h);
+        GL11.glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
+    }
 
-        final NBTTagList names = this.nData.getTagList(WireLessToolHelper.NbtSuperNames, 10);
-        final ArrayList<SavedName> savedNames = new ArrayList<>();
+    private void drawInset(final int x, final int y, final int w, final int h, final int u) {
+        this.bindTexture(TEXTURE);
+        this.drawTextured9PatchRect(x, y, w, h, u, 0, INSET_PATCH, INSET_PATCH);
+    }
 
-        for (int i = 0; i < names.tagCount(); i++) {
-            final NBTTagCompound tag = names.getCompoundTagAt(i);
-            savedNames.add(
-                    new SavedName(
-                            DimensionalCoord.readFromNBT(tag.getCompoundTag("network")),
-                            tag.getString("networkName"),
-                            AEColor.VALUES[tag.getInteger("color")],
-                            tag.hasKey("color"),
-                            tag.getString("colorName")));
-        }
+    private void drawTooltips(@Nullable final WirelessKitRow hovered, final int hoveredY, final int mx, final int my) {
+        List<String> lines = null;
 
-        final NBTTagList pins = this.nData.getTagList(WireLessToolHelper.NbtSuperPins, 10);
-        final ArrayList<SavedPin> savedPins = new ArrayList<>();
-
-        for (int i = 0; i < pins.tagCount(); i++) {
-            final NBTTagCompound tag = pins.getCompoundTagAt(i);
-            savedPins.add(
-                    new SavedPin(
-                            DimensionalCoord.readFromNBT(tag.getCompoundTag("network")),
-                            AEColor.VALUES[tag.getInteger("color")],
-                            PinType.values()[tag.getInteger("type")],
-                            DimensionalCoord.readFromNBT(tag.getCompoundTag("coord")),
-                            !tag.hasKey("incCon"),
-                            !tag.hasKey("incHub")));
-        }
-
-        for (final WirelessToolDataObject wdo : this.wData) {
-            boolean isPinned = false;
-            boolean isGroup = false;
-            boolean isSameColor = false;
-            boolean includeConnectors = true;
-            boolean includeHubs = true;
-            String networkName = "";
-            String colorName = "";
-
-            if (hideBounded == YesNo.YES && wdo.isConnected && !(wdo.isHub && wdo.slots != 0)) continue;
-
-            for (final SavedName savedName : savedNames) {
-                if (savedName.network.equals(wdo.network)) {
-                    if (savedName.byColor) {
-                        if (wdo.color == savedName.color) {
-                            colorName = savedName.colorName;
-                        }
-                    } else {
-                        networkName = savedName.name;
-                    }
-                }
+        if (this.paletteRow != null) {
+            final int cell = this.paletteCellAt(mx, my);
+            if (cell >= AEColor.VALUES.length) {
+                lines = Arrays.asList(
+                        ButtonToolTips.WirelessKitMadChameleonRecolorName.getLocal(),
+                        ButtonToolTips.WirelessKitMadChameleonRecolorDesc.getLocal());
+            } else if (cell >= 0) {
+                lines = Collections.singletonList(AEColor.VALUES[cell].toString());
             }
-
-            for (final SavedPin savedPin : savedPins) {
-                switch (savedPin.type) {
-                    case SINGLE -> {
-                        if (savedPin.coord.equals(wdo.cord)) {
-                            isPinned = true;
-                        }
-                    }
-
-                    case NETWORK, COLOR -> {
-                        if (savedPin.network.equals(wdo.network)) {
-                            if (savedPin.type == PinType.COLOR) {
-                                if (savedPin.color == wdo.color) {
-                                    isSameColor = true;
-                                    isPinned = true;
-                                    isGroup = true;
-                                }
-                            } else {
-                                isPinned = true;
-                                isGroup = true;
-                            }
-                        }
-                    }
-                }
-
-                if (isPinned) {
-                    includeConnectors = savedPin.includeConnectors;
-                    includeHubs = savedPin.includeHubs;
-                    break;
-                }
+        } else if (isInside(mx, my, SIZE_X, HEADER_Y, BUTTON, BUTTON)) {
+            lines = Arrays.asList(this.state.size.tooltip.getLocal(), ButtonToolTips.WirelessKitSizeHint.getLocal());
+        } else if (this.search.isMouseIn(mx, my)) {
+            lines = Arrays.asList(
+                    ButtonToolTips.WirelessKitSearch.getLocal(),
+                    ButtonToolTips.WirelessKitSearchWords.getLocal(),
+                    ButtonToolTips.WirelessKitSearchPhrase.getLocal(),
+                    ButtonToolTips.WirelessKitSearchClear.getLocal());
+        } else if (hovered != null && this.renaming == null) {
+            for (Placed p : this.layout(hovered, hoveredY)) {
+                if (p.contains(mx, my)) lines = p.button.tooltip;
             }
+            if (lines == null && isInside(mx, my, rowX(hovered) + ICON_X, hoveredY + ITEM_Y, ITEM_SIZE, ITEM_SIZE)) {
+                lines = hovered.tooltip;
+            }
+        }
 
-            if (isPinned) {
-                if (isGroup) {
-                    if (isSameColor) {
-                        GroupUnit gu = getNetworkUnitFormResolver(networkGroupResolver, wdo.network, wdo.color, true);
-                        if (gu == null) {
-                            GroupUnit newUnit = new GroupUnit(
-                                    wdo,
-                                    networkName,
-                                    true,
-                                    colorName,
-                                    includeConnectors,
-                                    includeHubs,
-                                    true);
-                            networkGroupResolver.add(newUnit);
-                            this.target.add(newUnit);
-                        } else {
-                            gu.addToGroup(wdo);
-                        }
+        if (lines != null && !lines.isEmpty()) this.drawTooltip(mx, my, lines.toArray(new String[0]));
+    }
 
-                    } else {
-                        GroupUnit gu = getNetworkUnitFormResolver(networkGroupResolver, wdo.network, null, true);
-                        if (gu != null) {
-                            gu.addToGroup(wdo);
-                        } else {
-                            GroupUnit newUnit = new GroupUnit(
-                                    wdo,
-                                    networkName,
-                                    false,
-                                    includeConnectors,
-                                    includeHubs,
-                                    true);
-                            networkGroupResolver.add(newUnit);
-                            this.target.add(newUnit);
-                        }
-                    }
-                } else {
-                    this.target.add(new singleUnit(wdo, networkName, colorName));
-                }
+    // ---- widgets on the right side of a row
+
+    private static final class Placed {
+
+        final Button button;
+        final int x;
+        final int y;
+        final int w;
+        final int h;
+
+        Placed(final Button button, final int x, final int y, final int w, final int h) {
+            this.button = button;
+            this.x = x;
+            this.y = y;
+            this.w = w;
+            this.h = h;
+        }
+
+        boolean contains(final int mx, final int my) {
+            return isInside(mx, my, this.x, this.y, this.w, this.h);
+        }
+    }
+
+    /**
+     * Buttons of a line are right-aligned and keep their order.
+     */
+    private List<Placed> layout(final WirelessKitRow row, final int y) {
+        final List<Placed> placed = new ArrayList<>();
+        this.placeLine(placed, row.upper, y + UPPER_Y);
+        this.placeLine(placed, row.lower, y + LOWER_Y);
+        return placed;
+    }
+
+    private void placeLine(final List<Placed> placed, final List<Button> buttons, final int y) {
+        int x = ROW_RIGHT;
+        for (int i = buttons.size() - 1; i >= 0; i--) {
+            final Button button = buttons.get(i);
+            final int w = button.label == null ? BUTTON
+                    : Math.min(TEXT_BUTTON_MAX, this.fontRendererObj.getStringWidth(button.label) + 10);
+            x -= w;
+            placed.add(new Placed(button, x, y, w, BUTTON));
+            x -= 1;
+        }
+    }
+
+    // ---- rename bar
+
+    private void drawRenameBar() {
+        if (this.renaming == null) return;
+
+        final int index = this.screenIndex(this.renaming);
+        if (index < 0) {
+            this.cancelRename();
+            return;
+        }
+
+        final int y = rowY(index);
+        this.placeRenameField(this.renaming);
+        this.renameField.y = y + 6;
+        GL11.glColor4f(1.0F, 1.0F, 1.0F, 1.0F);
+        this.drawInset(this.renameField.x - 1, y + 5, this.renameField.w + 2, 14, DARK_INSET_U);
+        this.renameField.drawTextBox();
+    }
+
+    private void placeRenameField(final WirelessKitRow row) {
+        this.renameField.x = rowX(row) + TEXT_X - 3;
+        this.renameField.w = ROW_RIGHT - this.renameField.x;
+    }
+
+    private void commitRename() {
+        final String name = this.renameField.getText().trim();
+        if (this.renameSubmit != null && !name.equals(this.renameInitial)) this.renameSubmit.accept(name);
+        this.cancelRename();
+    }
+
+    private void cancelRename() {
+        this.renaming = null;
+        this.renameSubmit = null;
+        this.renameField.setFocused(false);
+    }
+
+    // ---- colour palette
+
+    private static int paletteX() {
+        return ROW_RIGHT - PALETTE_W;
+    }
+
+    private int paletteY(final int screenIndex) {
+        final int below = rowY(screenIndex + 1);
+        return below + PALETTE_H <= this.ySize ? below : rowY(screenIndex) - PALETTE_H;
+    }
+
+    private void drawPalette(final int mx, final int my) {
+        if (this.paletteRow == null) return;
+
+        final int index = this.screenIndex(this.paletteRow);
+        if (index < 0) {
+            this.paletteRow = null;
+            return;
+        }
+
+        final int x = paletteX();
+        final int y = this.paletteY(index);
+        drawRect(x, y, x + PALETTE_W, y + PALETTE_H, ColorUtils.contextMenuBorder.getColor());
+        drawRect(x + 1, y + 1, x + PALETTE_W - 1, y + PALETTE_H - 1, ColorUtils.contextMenuBackground.getColor());
+
+        final int hovered = this.paletteCellAt(mx, my);
+        for (int cell = 0; cell < PALETTE_CELLS; cell++) {
+            // a cell is a 1 px outline around the swatch
+            final int ox = x + PALETTE_PAD + cell % PALETTE_COLUMNS * PALETTE_CELL;
+            final int oy = y + PALETTE_PAD + cell / PALETTE_COLUMNS * PALETTE_CELL;
+            drawRect(
+                    ox,
+                    oy,
+                    ox + PALETTE_CELL,
+                    oy + PALETTE_CELL,
+                    cell == hovered ? 0xFF000000 | WHITE : ColorUtils.colorButtonOutline.getColor());
+
+            final int sx = ox + 1;
+            final int sy = oy + 1;
+            final int half = PALETTE_SWATCH / 2;
+            if (cell < AEColor.VALUES.length) {
+                drawRect(
+                        sx,
+                        sy,
+                        sx + PALETTE_SWATCH,
+                        sy + PALETTE_SWATCH,
+                        0xFF000000 | AEColor.VALUES[cell].mediumVariant);
             } else {
-                if (mode == WirelessToolGroupBy.Single) {
-                    this.unselected.add(new singleUnit(wdo, networkName, colorName));
-                } else if (mode == WirelessToolGroupBy.Network) {
-                    GroupUnit gu = getNetworkUnitFormResolver(networkGroupResolver, wdo.network, null, false);
-                    if (gu != null) {
-                        gu.addToGroup(wdo);
-                    } else {
-                        GroupUnit newUnit = new GroupUnit(wdo, networkName);
-                        networkGroupResolver.add(newUnit);
-                        this.unselected.add(newUnit);
-                    }
-                } else {
-                    GroupUnit gu = getNetworkUnitFormResolver(networkGroupResolver, wdo.network, wdo.color, false);
-                    if (gu != null) {
-                        gu.addToGroup(wdo);
-                    } else {
-                        GroupUnit newUnit = new GroupUnit(wdo, networkName, true, colorName);
-                        networkGroupResolver.add(newUnit);
-                        this.unselected.add(newUnit);
-                    }
-                }
+                // Mad Chameleon picks a colour by itself
+                drawRect(sx, sy, sx + half, sy + half, 0xFF000000 | AEColor.Red.mediumVariant);
+                drawRect(sx + half, sy, sx + PALETTE_SWATCH, sy + half, 0xFF000000 | AEColor.Yellow.mediumVariant);
+                drawRect(sx, sy + half, sx + half, sy + PALETTE_SWATCH, 0xFF000000 | AEColor.Lime.mediumVariant);
+                drawRect(
+                        sx + half,
+                        sy + half,
+                        sx + PALETTE_SWATCH,
+                        sy + PALETTE_SWATCH,
+                        0xFF000000 | AEColor.LightBlue.mediumVariant);
             }
         }
-        setScrollBar();
+    }
+
+    private int paletteCellAt(final int mx, final int my) {
+        if (this.paletteRow == null) return -1;
+
+        final int index = this.screenIndex(this.paletteRow);
+        if (index < 0) return -1;
+
+        final int dx = mx - paletteX() - PALETTE_PAD;
+        final int dy = my - this.paletteY(index) - PALETTE_PAD;
+        if (dx < 0 || dy < 0) return -1;
+
+        final int col = dx / PALETTE_CELL;
+        final int row = dy / PALETTE_CELL;
+        if (col >= PALETTE_COLUMNS) return -1;
+
+        final int cell = row * PALETTE_COLUMNS + col;
+        return cell < PALETTE_CELLS ? cell : -1;
+    }
+
+    // ---- input
+
+    @Override
+    protected void mouseClicked(final int mouseX, final int mouseY, final int button) {
+        final int mx = mouseX - this.guiLeft;
+        final int my = mouseY - this.guiTop;
+
+        if (this.paletteRow != null) {
+            final int cell = this.paletteCellAt(mx, my);
+            if (cell >= 0 && button == 0) {
+                this.playClick();
+                this.sendRecolor(
+                        this.paletteRow.recolorDevices,
+                        cell < AEColor.VALUES.length ? AEColor.VALUES[cell] : null);
+            }
+            this.paletteRow = null;
+            return;
+        }
+
+        if (this.renaming != null) {
+            if (this.renameField.isMouseIn(mx, my)) {
+                this.renameField.mouseClicked(mx, my, button);
+                return;
+            }
+            this.cancelRename();
+        }
+
+        this.search.mouseClicked(mx, my, button);
+        if (this.search.isMouseIn(mx, my)) return;
+
+        if (button <= 1 && isInside(mx, my, SIZE_X, HEADER_Y, BUTTON, BUTTON)) {
+            this.playClick();
+            this.state.size = this.state.size.next(button == 1);
+            this.initGui();
+            return;
+        }
+
+        if (isInside(mx, my, LIST_X, LIST_Y, LIST_W, this.visibleRows * ROW_H)) {
+            final int index = (my - LIST_Y) / ROW_H;
+            final int scroll = this.scrollbar.getCurrentScroll();
+            if (scroll + index < this.rows.size()
+                    && this.clickRow(this.rows.get(scroll + index), rowY(index), mx, my, button)) {
+                return;
+            }
+        }
+
+        super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    private boolean clickRow(final WirelessKitRow row, final int y, final int mx, final int my, final int button) {
+        for (Placed p : this.layout(row, y)) {
+            if (!p.contains(mx, my)) continue;
+            if (button == 0 && p.button.enabled && p.button.action != null) {
+                this.playClick();
+                p.button.action.run();
+            }
+            return true;
+        }
+
+        if (button == 0 && isInside(mx, my, rowX(row), y, ICON_X, ROW_H)) {
+            if (row.onToggle != null) {
+                row.onToggle.run();
+                return true;
+            }
+            if (row.onCheck != null) {
+                this.playClick();
+                row.onCheck.run();
+                return true;
+            }
+        }
+
+        if (button == 0 && isShiftKeyDown() && !row.devices.isEmpty()) {
+            this.highlightInWorld(row);
+            return true;
+        }
+
+        final Runnable action = button == 0 ? row.onClick : button == 1 ? row.onRightClick : null;
+        if (action == null) return false;
+
+        action.run();
+        return true;
+    }
+
+    @Override
+    protected void keyTyped(final char typedChar, final int keyCode) {
+        if (this.renaming != null) {
+            if (keyCode == Keyboard.KEY_RETURN || keyCode == Keyboard.KEY_NUMPADENTER) this.commitRename();
+            else if (keyCode == Keyboard.KEY_ESCAPE) this.cancelRename();
+            else this.renameField.textboxKeyTyped(typedChar, keyCode);
+            return;
+        }
+
+        if (this.paletteRow != null && keyCode == Keyboard.KEY_ESCAPE) {
+            this.paletteRow = null;
+            return;
+        }
+
+        if (this.search.isFocused() && this.search.textboxKeyTyped(typedChar, keyCode)) return;
+
+        super.keyTyped(typedChar, keyCode);
+    }
+
+    @Override
+    protected boolean mouseWheelEvent(final int x, final int y, final int wheel) {
+        // popups stick to their row, scrolling closes them
+        this.paletteRow = null;
+        this.cancelRename();
+        return false;
+    }
+
+    private void highlightInWorld(final WirelessKitRow row) {
+        final String[] messages = { PlayerMessages.WirelessHighlighted.getUnlocalized(),
+                PlayerMessages.WirelessInOtherDim.getUnlocalized() };
+        final Map<NamedDimensionalCoord, String[]> blocks = new HashMap<>();
+        row.devices.forEach(device -> blocks.put(device, messages));
+        BlockPosHighlighter.highlightNamedBlocks(this.mc.thePlayer, blocks, row.highlightPrefix);
+        this.closeGui();
+    }
+
+    private void playClick() {
+        this.mc.getSoundHandler()
+                .playSound(PositionedSoundRecord.func_147674_a(new ResourceLocation("gui.button.press"), 1.0F));
+    }
+
+    // ---- actions of the rows
+
+    @Override
+    public void setActive(final DimensionalCoord device) {
+        final WirelessKitCommand command = new WirelessKitCommand(WirelessKitCommands.SET_ACTIVE);
+        command.setCommand(SubCommand.single(device));
+        send(command);
+    }
+
+    @Override
+    public void bind(final List<DimensionalCoord> sources) {
+        final WirelessToolDataObject target = this.tree == null ? null : this.tree.getBindTarget();
+        if (target == null || sources.isEmpty()) return;
+
+        final WirelessKitCommand command = new WirelessKitCommand(WirelessKitCommands.BIND);
+        sources.forEach(source -> command.addToBind(SubCommand.single(source)));
+        command.addTarget(SubCommand.single(target.cord));
+        send(command);
+    }
+
+    @Override
+    public void unbind(final DimensionalCoord device) {
+        final WirelessKitCommand command = new WirelessKitCommand(WirelessKitCommands.UNBIND);
+        command.addToBind(SubCommand.single(device));
+        send(command);
+    }
+
+    @Override
+    public void unbindAll(final DimensionalCoord hub) {
+        if (this.isUnbindArmed(hub)) {
+            this.armedHub = null;
+            this.unbind(hub);
+        } else {
+            this.armedHub = hub;
+            this.armedUntil = System.currentTimeMillis() + CONFIRM_MS;
+        }
+        this.rowsDirty = true;
+    }
+
+    @Override
+    public boolean isUnbindArmed(final DimensionalCoord hub) {
+        return hub.equals(this.armedHub);
+    }
+
+    @Override
+    public void rename(final WirelessKitRow row, final String current, final Consumer<String> submit) {
+        this.renaming = row;
+        this.renameInitial = current;
+        this.renameSubmit = submit;
+        this.placeRenameField(row);
+        this.renameField.setText(current, true);
+        this.renameField.setCursorPositionEnd();
+        this.renameField.setFocused(true);
+        this.search.setFocused(false);
+    }
+
+    @Override
+    public void renameDevice(final DimensionalCoord device, final String name) {
+        final WirelessKitCommand command = new WirelessKitCommand(WirelessKitCommands.RENAME_SINGLE);
+        command.setName(name);
+        command.setCommand(SubCommand.single(device));
+        send(command);
+    }
+
+    @Override
+    public void recolor(final WirelessKitRow row) {
+        this.paletteRow = row;
+    }
+
+    /** A null colour is Mad Chameleon. */
+    private void sendRecolor(final List<DimensionalCoord> devices, @Nullable final AEColor color) {
+        final WirelessKitCommand command = new WirelessKitCommand(WirelessKitCommands.RECOLOR);
+        devices.forEach(device -> command.addToBind(SubCommand.single(device)));
+        command.setColor(color);
+        send(command);
+    }
+
+    @Override
+    public void removeNetwork(final DimensionalCoord anchor) {
+        final WirelessKitCommand command = new WirelessKitCommand(WirelessKitCommands.DELETE);
+        command.setNetworkPos(anchor);
+        send(command);
+    }
+
+    @Override
+    public void viewChanged() {
+        this.rowsDirty = true;
+    }
+
+    private static void send(final WirelessKitCommand command) {
+        try {
+            NetworkHandler.instance.sendToServer(new PacketWirelessToolCommand(command));
+        } catch (IOException e) {
+            AELog.debug(e);
+        }
+    }
+
+    private static boolean isInside(final int mx, final int my, final int x, final int y, final int w, final int h) {
+        return mx >= x && mx < x + w && my >= y && my < y + h;
+    }
+
+    private String fit(final String text, final int width) {
+        if (this.fontRendererObj.getStringWidth(text) <= width) return text;
+
+        final String ellipsis = "...";
+        final int room = width - this.fontRendererObj.getStringWidth(ellipsis);
+        return room <= 0 ? "" : this.fontRendererObj.trimStringToWidth(text, room) + ellipsis;
     }
 }

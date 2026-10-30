@@ -17,6 +17,7 @@ public class HighlighterManager {
         registerHighlighter(StoragePosHighlighter.INSTANCE);
         registerHighlighter(BlockPosHighlighter.INSTANCE);
         registerHighlighter(ItemFlowHighlighter.INSTANCE);
+        registerHighlighter(WirelessKitHighlighter.INSTANCE);
     }
 
     static void registerHighlighter(IHighlighter h) {
@@ -26,12 +27,10 @@ public class HighlighterManager {
     @SubscribeEvent
     public void renderHighlightedBlocks(RenderWorldLastEvent event) {
         time = System.currentTimeMillis();
-        if (((time / 500) & 1) == 0) {
-            // this does the blinking effect
-            return;
-        }
+        // this does the blinking effect
+        final boolean blinkOff = ((time / 500) & 1) == 0;
         for (IHighlighter h : HIGHLIGHTERS) {
-            if (h.noWork()) continue;
+            if (h.noWork() || blinkOff && h.blinks()) continue;
             if (hasExpireHighlightTime(h)) {
                 h.clear();
                 continue;

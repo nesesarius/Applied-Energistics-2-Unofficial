@@ -9,11 +9,9 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
-import net.minecraft.nbt.NBTTagList;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.EnumChatFormatting;
 import net.minecraft.world.World;
-import net.minecraftforge.common.util.Constants.NBT;
 import net.minecraftforge.common.util.ForgeDirection;
 
 import com.gtnewhorizon.gtnhlib.item.ItemStackNBT;
@@ -90,8 +88,7 @@ public class ToolWirelessKit extends AEBaseItem implements IGuiItem {
         final WirelessToolMode mode = (WirelessToolMode) getConfigManager(is).getSetting(Settings.WIRELESS_TOOL_MODE);
         final TileEntity te = w.getTileEntity(x, y, z);
 
-        if (mode == WirelessToolMode.Super && te instanceof IGridHost)
-            return WireLessToolHelper.bindSuper(te, is, w, p);
+        if (mode == WirelessToolMode.Super && te instanceof IGridHost) return WireLessToolHelper.useSuper(te, is, w, p);
 
         if (!(te instanceof TileWirelessBase target)) return false;
 
@@ -202,32 +199,11 @@ public class ToolWirelessKit extends AEBaseItem implements IGuiItem {
             }
 
             case Super -> {
-                final NBTTagCompound stash = tag.getCompoundTag(WireLessToolHelper.NbtSuper);
-                final List<DimensionalCoord> dcl = DimensionalCoord
-                        .readAsListFromNBT(stash.getCompoundTag(WireLessToolHelper.NbtSuperPos));
-                if (dcl.isEmpty()) lines.add(WirelessMessages.SuperNetworkListEmpty.getLocal());
-                else {
-                    lines.add(WirelessMessages.SuperNetworkList.getLocal());
-                    final NBTTagList tagNames = stash.getTagList(WireLessToolHelper.NbtSuperNames, NBT.TAG_COMPOUND);
-                    for (final DimensionalCoord network : dcl) {
-                        String customName = "";
-
-                        // the position sits under "network", and colour entries carry a colour name instead
-                        for (int i = 0; i < tagNames.tagCount(); i++) {
-                            final NBTTagCompound tagName = tagNames.getCompoundTagAt(i);
-                            if (!tagName.hasKey("networkName")) continue;
-                            if (!network.equals(DimensionalCoord.readFromNBT(tagName.getCompoundTag("network"))))
-                                continue;
-
-                            customName = tagName.getString("networkName");
-                            break;
-                        }
-
-                        lines.add(
-                                WirelessMessages.SuperNetwork
-                                        .getLocal(customName + " ", network.getGuiTextShortNoDim()));
-                    }
-                }
+                final DimensionalCoord network = WireLessToolHelper
+                        .getSuperNetwork(tag.getCompoundTag(WireLessToolHelper.NbtSuper));
+                lines.add(
+                        network == null ? WirelessMessages.SuperNetworkListEmpty.getLocal()
+                                : WirelessMessages.SuperNetwork.getLocal(network.getGuiTextShortNoDim()));
             }
         }
     }

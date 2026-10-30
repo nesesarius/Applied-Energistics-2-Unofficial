@@ -70,7 +70,6 @@ public enum PlayerMessages implements Localization {
     WirelessGroupInOtherDim,
     WirelessHighlighterPrefix,
     WirelessHighlighterNetworkPrefix,
-    WirelessHighlighterColorPrefix,
     CableSwapped,
     InterfaceUpgradeRemovalBlocked;
 
